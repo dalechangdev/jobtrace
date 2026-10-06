@@ -8,7 +8,9 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"],
-      exclude: ["**/*.test.ts", "packages/test-sites/**"],
+      // The recorder's injected script runs inside the browser, where Node's
+      // coverage cannot see it; it is exercised through real pages instead.
+      exclude: ["**/*.test.ts", "packages/test-sites/**", "packages/recorder/src/injected/**"],
     },
   },
 });

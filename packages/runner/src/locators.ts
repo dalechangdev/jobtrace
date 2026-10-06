@@ -1,8 +1,8 @@
 import { JobTraceError, type Locator as LocatorSpec, type Target } from "@jobtrace/core";
-import type { FrameLocator, Locator, Page } from "playwright";
+import type { Frame, FrameLocator, Locator, Page } from "playwright";
 import { checkAbort, emit, type RunState, type Scope, sleep } from "./state.ts";
 
-type Root = Page | FrameLocator | Locator;
+type Root = Page | Frame | FrameLocator | Locator;
 type AriaRole = Parameters<Page["getByRole"]>[0];
 
 /** Translates one recorded locator into a Playwright locator under `root`. */

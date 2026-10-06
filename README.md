@@ -4,10 +4,11 @@ Record how you navigate a career website, then replay those steps to scrape its 
 listings: manually now, on a schedule later. Open source (MIT), run by developers from
 source.
 
-> **Status: early.** The recording format, the replay engine and `jobtrace run` work
-> (milestones M0–M1 of [PLAN.md](PLAN.md)). The point-and-click recorder, database,
-> web UI, scheduler and ATS API sources are not built yet, so for now recordings are
-> written by hand.
+> **Status: early.** You can record basic actions and single fields with
+> `jobtrace record` and replay them with `jobtrace run` (milestones M0–M2 of
+> [PLAN.md](PLAN.md)). Recording lists of jobs, detail pages and pagination comes next;
+> until then those loops are written by hand (see `examples/recordings`). The database,
+> web UI, scheduler and ATS API sources are not built yet.
 
 ## Quickstart
 
@@ -22,6 +23,39 @@ pnpm jobtrace run examples/recordings/list-detail.jobtrace.json
 ```
 
 The jobs are printed as JSON on stdout; the run log goes to stderr.
+
+## `jobtrace record`
+
+```
+jobtrace record <url> [--name <name>] [--out <file>] [--force]
+```
+
+Opens a Chromium window on `<url>` with a small toolbar:
+
+- **Record** (the default): browse as usual. Clicks, typed text, dropdown choices,
+  Enter/Escape/Tab and the addresses you type are captured as steps.
+- **Mark field**: the page stops reacting to clicks. Click a piece of data, pick what it
+  is (`title`, `location`, a custom name, ...) and whether to read its text, its link
+  URL or its HTML. Press Escape or **Record** to go back to browsing.
+- **Stop**: finish and save. Closing the window or pressing Ctrl+C in the terminal does
+  the same.
+
+The recording is written to `--out`, or to `<name>.jobtrace.json` in the current
+directory, and its path is printed on stdout. An existing file is never overwritten
+unless you pass `--force`.
+
+Things to know:
+
+- **Passwords are never recorded.** Text typed into password, payment-card and
+  one-time-code fields is skipped, with a warning. Scraping behind a login will use auth
+  profiles (not built yet).
+- Marked fields are one-off for now: marking the first job's title extracts the first
+  job's title. Repeating that for every job on the page is the next milestone.
+- After an action that changes the URL, the recording waits for the new URL using a
+  pattern such as `**/jobs/*`. If a site's URLs change shape, delete or edit that
+  `waitFor` step.
+- A link that opens a new tab is recorded as a navigation to that tab's address,
+  because replays stay in one tab.
 
 ## `jobtrace run`
 

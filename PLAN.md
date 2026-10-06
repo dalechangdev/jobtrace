@@ -282,10 +282,20 @@ Locator ranking prefers stable signals: test ids, then ARIA role and name, then 
 - iframes: record the frame chain into `Target.frame`. Shadow DOM: pierce open shadow roots when generating locators.
 - **Sensitive input**: never record values from `input[type=password]`, or fields whose `autocomplete` contains `password`, `cc-`, or `one-time-code`. Emit a warning step that tells the user to use an auth profile instead.
 
+### 6.2a Decisions made while building M2
+- **Injected script**: authored as ordinary TypeScript modules under `packages/recorder/src/injected` and bundled into one IIFE with esbuild the first time a session starts. There is still no separate build step.
+- **Typed URL vs. click-caused navigation**: decided from Chromium's own signal (CDP `Page.frameRequestedNavigation` fires only for navigations the page started), not from timing. Back, forward and reload count as typed.
+- **Sensitive input**: the format has no "warning step", so warnings are returned next to the recording (`RecorderResult.warnings`), printed by the CLI and shown as a toast. Fields are also treated as sensitive when their name or id looks like a password, card or one-time-code field.
+- **New tabs**: replays stay in one tab, so a click that opens a new tab is replaced by a `navigate` to that tab's URL, with a warning.
+- **`submit` and `scroll` events** are not captured as steps: a submit always follows a recorded Enter or click, and scrolling arrives with infinite scroll in M3. Enter on a form field is recorded as the key press only; the click the browser then fires on the submit button is ignored.
+- **`input`/`change` events** are accepted even when a script dispatched them (what matters is the resulting value); clicks and key presses must be real user input.
+- **Field targets** never use text or name-based locators, because the text is what changes between runs.
+- **Locator checking**: each generated locator is checked in the page, then again with the real Playwright engine while the element is still there. After a click that navigated away, the second check is not possible and the locators are kept as generated.
+
 ### 6.3 Post-processing
 - Merge redundant steps (click-then-fill on the same input becomes a fill; consecutive scrolls are coalesced).
 - Drop no-op clicks (e.g. on non-interactive elements with no effect) when a later step clearly supersedes them.
-- Insert implicit `waitFor` after actions that caused navigation or DOM changes.
+- Insert an implicit `waitFor` on the new URL after actions that changed the URL. The pattern generalizes what varies between runs: ids in the path, typed search terms, the query string (e.g. `**/jobs/*`, `**/search?*`). Actions that only changed the DOM get no wait; the next step's own locator wait covers them.
 - Validate each locator against a DOM snapshot taken at capture time: it must resolve uniquely (or to all items for list targets).
 
 ### 6.4 Locator generation

@@ -9,8 +9,8 @@ silently diverging. Record agreed changes in `PLAN.md` itself.
 
 - [x] M0 — Scaffold and mock sites
 - [x] M1 — Recording format and replay engine
-- [ ] M2 — Recorder: basic actions  ← next
-- [ ] M3 — Recorder: lists, detail pages, pagination
+- [x] M2 — Recorder: basic actions
+- [ ] M3 — Recorder: lists, detail pages, pagination  ← next
 - [ ] M4 — Persistence
 - [ ] M4b — ATS API sources (Greenhouse, Lever, Ashby)
 - [ ] M5 — Auth profiles and politeness
@@ -32,7 +32,8 @@ A milestone is done when its acceptance criteria in `PLAN.md` pass, along with
 - `pnpm test -u` — also rewrite golden files (`packages/runner/src/__golden__`); review the diff
 - `pnpm exec vitest run packages/runner` — one package
 - `pnpm test-sites` — mock career sites on http://127.0.0.1:4400
-- `pnpm jobtrace run <file>` — the CLI
+- `pnpm jobtrace run <file>` — replay a recording
+- `pnpm jobtrace record <url>` — open the headed recorder
 
 Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`, `pnpm db:migrate`.
 
@@ -41,6 +42,9 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`, `pnpm db:migr
 - `packages/core` — recording Zod schemas and types, migrations, templating, errors, ids, config
 - `packages/extractor` — transforms, salary/date parsing, URL canonicalization, normalization, dedup. No browser dependency: ATS API sources will reuse it.
 - `packages/runner` — replay engine. `runRecording(recording, options)` is the one entry point.
+- `packages/recorder` — `startRecording(options)` runs a session. `src/injected/` is the
+  script that runs inside recorded pages (locator generator, event capture, overlay),
+  bundled with esbuild at session start; `postprocess.ts` turns the raw capture into steps.
 - `packages/test-sites` — mock career sites; `src/data.ts` is the ground truth tests compare against
 - `apps/cli` — the `jobtrace` binary
 - `examples/recordings` — hand-written recordings for the mock sites, also used by tests
@@ -64,6 +68,14 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`, `pnpm db:migr
 - `runRecording` never throws for run problems; it reports them through `status`,
   `reason` and `error`. Run-level errors (cancel, timeout, bot wall, auth, robots)
   must not be swallowed as per-item failures; see `isRunLevelError`.
+- Code under `packages/recorder/src/injected` runs in the browser: no Node APIs, and
+  only `import type` from `@jobtrace/core` (a value import would bundle Node code into
+  the page). No `innerHTML` or inline styles there either; strict-CSP sites reject them.
+- Messages from recorded pages are untrusted input; they are validated in
+  `recorder/src/messages.ts` before use.
+- Recorder tests run headless with `openShadow: true` so they can click the overlay's
+  buttons; drive the page with real input (`click`, `pressSequentially`), since scripted
+  clicks and key presses are ignored on purpose.
 - Tests never use real websites. Use the mock sites with `fastOptions()` from
   `packages/runner/src/testing.ts` (no delays, short waits, fixed clock).
 - No CAPTCHA solving, stealth plugins or fingerprint spoofing, ever.

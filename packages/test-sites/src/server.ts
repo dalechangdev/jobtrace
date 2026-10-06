@@ -33,7 +33,7 @@ export const SITES = {
   robotsDisallowed: "/disallowed/",
 } as const;
 
-export const LOGIN_CREDENTIALS = { username: "demo", password: "demo" } as const;
+export const LOGIN_CREDENTIALS = { username: "demo", password: "correct-horse-battery" } as const;
 const SESSION_COOKIE = "jobtrace_session";
 
 const clientScript = (name: string) =>
