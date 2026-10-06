@@ -1,5 +1,6 @@
 export { openDatabase } from "./sqlite.ts";
 export type {
+  AuthProfile,
   Database,
   JobFilter,
   JobRecord,

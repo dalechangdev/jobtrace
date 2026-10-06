@@ -10,6 +10,7 @@
   "dependencies": {
     "@jobtrace/core": "workspace:*",
     "@jobtrace/extractor": "workspace:*",
+    "@jobtrace/politeness": "workspace:*",
     "playwright": "^1.63.0"
   },
   "devDependencies": {

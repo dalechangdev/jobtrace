@@ -5,7 +5,12 @@ import { z } from "zod";
  * Changing a schema here means bumping CURRENT_SCHEMA_VERSION and adding a
  * migration in ./migrations.
  */
-export const CURRENT_SCHEMA_VERSION = 1;
+/**
+ * Version history:
+ *  1 — first format
+ *  2 — adds the optional top-level `loggedInCheck`
+ */
+export const CURRENT_SCHEMA_VERSION = 2;
 
 const nonEmpty = z.string().min(1);
 
@@ -211,6 +216,11 @@ export const recordingSchema = z
     name: nonEmpty,
     startUrl: nonEmpty,
     authProfileId: z.string().nullable().default(null),
+    /**
+     * An element that is only on the page while logged in. When set, a run that
+     * does not find it after its first navigation ends with `auth_expired`.
+     */
+    loggedInCheck: targetSchema.optional(),
     /** Run parameters, referenced in step strings as `{{params.<name>}}`. */
     params: z.record(z.string(), paramSchema).default({}),
     settings: settingsSchema.default(() => settingsSchema.parse({})),

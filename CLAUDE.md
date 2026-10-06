@@ -13,8 +13,8 @@ silently diverging. Record agreed changes in `PLAN.md` itself.
 - [x] M3 — Recorder: lists, detail pages, pagination
 - [x] M4 — Persistence
 - [x] M4b — ATS API sources (Greenhouse, Lever, Ashby)
-- [ ] M5 — Auth profiles and politeness  ← next
-- [ ] M6 — API and worker
+- [x] M5 — Auth profiles and politeness
+- [ ] M6 — API and worker  ← next
 - [ ] M7 — Web UI
 - [ ] M8 — Scheduler
 - [ ] M9 — Packaging and docs
@@ -48,6 +48,9 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`.
   bundled with esbuild at session start; `postprocess.ts` turns the raw capture into steps.
 - `packages/db` — Drizzle schema, SQL migrations (`migrations/`), and the `Database`
   interface with its SQLite implementation. `openDatabase(url)` migrates on open.
+- `packages/politeness` — robots.txt checks with a cache, per-domain locks, bot-wall
+  detection (pure functions over a page snapshot) and Retry-After parsing. No browser
+  dependency; the runner collects the snapshots.
 - `packages/sources` — API sources: adapters mapping the Greenhouse, Lever and Ashby
   feeds to raw job records, and `fetchSource(source, options)`, which returns the same
   `RunResult` as a browser replay. No browser dependency.
@@ -102,4 +105,10 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`.
   (unknown fields ignored, absent ones tolerated) and skip unreadable entries.
 - Tests never use real websites. Use the mock sites with `fastOptions()` from
   `packages/runner/src/testing.ts` (no delays, short waits, fixed clock).
-- No CAPTCHA solving, stealth plugins or fingerprint spoofing, ever.
+- No CAPTCHA solving, stealth plugins or fingerprint spoofing, ever. Guards in
+  `runner/src/guards.ts` only ever stop a run; never add a retry that works around a
+  refusal. Waiting out a `Retry-After` once is the only retry.
+- Saved logins are secrets: session files are written `0600`, and their contents must
+  never be logged, exported, or put in an event or error message.
+- Changing the recording format means bumping `CURRENT_SCHEMA_VERSION`, adding a
+  migration (even an identity one) and a line to the version history in `recording.ts`.

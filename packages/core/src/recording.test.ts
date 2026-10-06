@@ -7,7 +7,7 @@ const target = (css: string) => ({ locators: [{ kind: "css" as const, value: css
 
 function recording(overrides: Partial<RecordingInput> = {}): RecordingInput {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "rec_test",
     name: "Test",
     startUrl: "https://careers.example/jobs",

@@ -8,10 +8,13 @@ import {
   type RecordingInput,
 } from "@jobtrace/core";
 import { type Database, openDatabase } from "@jobtrace/db";
+import { createPoliteness } from "@jobtrace/politeness";
+import { captureAuth } from "@jobtrace/recorder";
 import {
   ATS_PATHS,
   CHANGED_SALARY,
   changingJobs,
+  LOGIN_CREDENTIALS,
   type RunningTestSites,
   SITES,
   startTestSites,
@@ -57,7 +60,7 @@ function boardRecording(
   extra: RecordingInput["steps"] = [],
 ): Recording {
   return parseRecording({
-    schemaVersion: 1,
+    schemaVersion: 2,
     id,
     name: "Changing board",
     startUrl: sites.url(path),
@@ -74,7 +77,7 @@ function boardRecording(
             type: "extract",
             scope: "item",
             fields: [
-              { name: "title", target: item("a.title"), required: true },
+              { name: "title", target: item(".title"), required: true },
               {
                 name: "url",
                 target: item("a.title"),
@@ -292,6 +295,122 @@ describe("executeRun", () => {
       artifactRetentionRuns: 20,
     });
     expect(run).toMatchObject({ status: "blocked", reason: "bot_wall", stats: { jobs: 0 } });
+  });
+
+  it("refuses a site that robots.txt disallows, and stores a blocked run with its screenshot", async () => {
+    const politeness = createPoliteness();
+    await db.recordings.save(boardRecording("rec_disallowed", SITES.robotsDisallowed));
+    const refused = await execute("rec_disallowed", { politeness });
+    expect(refused.run).toMatchObject({
+      status: "failed",
+      reason: "robots_disallowed",
+      stats: { jobs: 0 },
+    });
+    // Without politeness nothing is checked, which is what the other tests rely on.
+    expect((await execute("rec_disallowed")).run.status).toBe("succeeded");
+
+    await db.recordings.save(boardRecording("rec_walled", SITES.botWall));
+    const blocked = await execute("rec_walled", { politeness });
+    expect(blocked.run).toMatchObject({ status: "blocked", reason: "bot_wall" });
+    expect(blocked.artifacts.map((artifact) => artifact.type)).toEqual(["screenshot", "dom"]);
+    expect(existsSync(blocked.artifacts[0]?.path ?? "")).toBe(true);
+  });
+
+  it("runs on the same site take turns", async () => {
+    const politeness = createPoliteness();
+    await db.recordings.save(boardRecording("rec_one"));
+    await db.recordings.save(boardRecording("rec_two"));
+    const events: string[] = [];
+    const [first, second] = await Promise.all([
+      execute("rec_one", { politeness, onEvent: (event) => events.push(`one:${event.type}`) }),
+      execute("rec_two", { politeness, onEvent: (event) => events.push(`two:${event.type}`) }),
+    ]);
+    expect([first.run.status, second.run.status]).toEqual(["succeeded", "succeeded"]);
+    expect(events).toContain("two:waiting");
+    // The second run only started once the first had finished.
+    expect(events.indexOf("two:run_started")).toBeGreaterThan(events.indexOf("one:run_finished"));
+
+    const controller = new AbortController();
+    const release = await politeness.locks.acquire("127.0.0.1");
+    const waiting = execute("rec_two", { politeness, run: { browser, signal: controller.signal } });
+    controller.abort();
+    expect((await waiting).run).toMatchObject({ status: "cancelled", reason: "run_cancelled" });
+    release();
+  });
+
+  describe("saved logins", () => {
+    const loginBoard = (authProfileId: string) =>
+      parseRecording({
+        ...boardRecording("rec_internal", SITES.login),
+        authProfileId,
+        loggedInCheck: { locators: [{ kind: "testId", value: "signed-in" }] },
+      });
+
+    async function saveLogin(name = "Intranet") {
+      const storageStatePath = join(dataDir, "auth", `${name}.json`);
+      const capture = await captureAuth({
+        url: sites.url(`${SITES.login}signin`),
+        statePath: storageStatePath,
+        browser,
+        headless: true,
+        openShadow: true,
+      });
+      await capture.page.locator('input[name="username"]').fill(LOGIN_CREDENTIALS.username);
+      await capture.page.locator('input[name="password"]').fill(LOGIN_CREDENTIALS.password);
+      await capture.page.getByRole("button", { name: "Sign in" }).click();
+      await capture.page.getByTestId("signed-in").waitFor();
+      expect(await capture.save()).toEqual({ saved: true, domain: "127.0.0.1" });
+      return db.authProfiles.save({
+        id: `auth_${name}`,
+        name,
+        domain: "127.0.0.1",
+        storageStatePath,
+      });
+    }
+
+    it("site 6: runs with the saved login, then fails with auth_expired once it is invalidated", async () => {
+      const profile = await saveLogin();
+      expect(profile.lastVerifiedAt).toBeNull();
+      await db.recordings.save(loginBoard(profile.id));
+
+      const working = await execute("rec_internal");
+      expect(working.run).toMatchObject({ status: "succeeded", stats: { jobs: 5 } });
+      expect((await db.authProfiles.get(profile.id))?.lastVerifiedAt).not.toBeNull();
+      expect((await db.authProfiles.list())[0]).toMatchObject({ name: "Intranet", usedBy: 1 });
+
+      await fetch(sites.url(`${SITES.login}__invalidate`), { method: "POST" });
+      const expired = await execute("rec_internal");
+      expect(expired.run).toMatchObject({
+        status: "failed",
+        reason: "auth_expired",
+        error: { code: "AUTH_EXPIRED" },
+        stats: { jobs: 0 },
+      });
+      // Nothing was closed or lost because of the failed run.
+      expect(await db.jobs.count()).toBe(5);
+    });
+
+    it("fails cleanly when the profile or its session file is gone", async () => {
+      await db.recordings.save(loginBoard("auth_never_existed"));
+      const orphaned = await execute("rec_internal");
+      expect(orphaned.run).toMatchObject({
+        status: "failed",
+        reason: "auth_expired",
+        stats: { pages: 0 },
+      });
+      expect(orphaned.run.error?.message).toMatch(/no longer exists/);
+
+      const profile = await saveLogin("Gone");
+      rmSync(profile.storageStatePath);
+      await db.recordings.save(loginBoard(profile.id));
+      expect((await execute("rec_internal")).run.error?.message).toMatch(
+        /saved login of auth profile "Gone" is missing/,
+      );
+      const [latest] = await db.runs.list();
+      expect((await db.runs.events(latest?.id ?? "")).map((event) => event.type)).toContain(
+        "run_error",
+      );
+    });
   });
 
   it("executes a run that was queued earlier", async () => {

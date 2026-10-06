@@ -314,6 +314,37 @@ ${jobList(jobsFor("login"))}`,
   app.get(`${SITES.botWall}rate-limited`, (_request, reply) =>
     reply.code(429).header("retry-after", "30").type("text/plain").send("Too Many Requests"),
   );
+  // Rate limited on the first visit only, then the static list: for Retry-After handling.
+  let limitedVisits = 0;
+  app.get(`${SITES.botWall}once-limited`, (_request, reply) => {
+    limitedVisits++;
+    if (limitedVisits % 2 === 1) {
+      return reply
+        .code(429)
+        .header("retry-after", "1")
+        .type("text/plain")
+        .send("Too Many Requests");
+    }
+    return html(
+      reply,
+      page({
+        title: `Jobs at ${COMPANY}`,
+        body: `<h1>Open positions</h1>${jobList(jobsFor("staticList"))}`,
+      }),
+    );
+  });
+  // A page that links to refusals and to a challenge, for navigations caused by clicks.
+  app.get(`${SITES.botWall}links`, (_request, reply) =>
+    html(
+      reply,
+      page({
+        title: "Links",
+        body: `<h1>Links</h1><p><a id="to-forbidden" href="${SITES.botWall}forbidden">forbidden</a>
+<a id="to-challenge" href="${SITES.botWall}">challenge</a>
+<a id="to-disallowed" href="${SITES.robotsDisallowed}">disallowed</a></p>`,
+      }),
+    ),
+  );
   app.get(`${SITES.botWall}forbidden`, (_request, reply) =>
     reply.code(403).type("text/plain").send("Forbidden"),
   );

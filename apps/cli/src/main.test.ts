@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -8,10 +8,12 @@ import {
   CHANGED_SALARY,
   changingJobs,
   jobsFor,
+  LOGIN_CREDENTIALS,
   type RunningTestSites,
   SITES,
   startTestSites,
 } from "@jobtrace/test-sites";
+import type { Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { duration, outline, parseSince, table } from "./format.ts";
 import { type MainIo, main } from "./main.ts";
@@ -152,7 +154,7 @@ describe("jobtrace record", () => {
     expect(recorded.stderr).toMatch(/Saved "My board": 2 step\(s\), 1 field\(s\)/);
     expect(recorded.stderr).toContain(`title: ${jobsFor("staticList")[0]?.title}`);
     expect(JSON.parse(readFileSync(out, "utf8"))).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: "My board",
     });
 
@@ -313,7 +315,7 @@ describe("stored recordings, tracked runs and jobs", () => {
   it("exports, imports and deletes recordings", async () => {
     const exported = await cli(["recordings", "export", recordingId]);
     const definition = JSON.parse(exported.stdout);
-    expect(definition).toMatchObject({ id: recordingId, name: "Changing board", schemaVersion: 1 });
+    expect(definition).toMatchObject({ id: recordingId, name: "Changing board", schemaVersion: 2 });
 
     const file = join(dataDir, "copy.jobtrace.json");
     writeFileSync(file, JSON.stringify({ ...definition, id: "rec_copy", name: "Copy" }));
@@ -345,6 +347,174 @@ describe("stored recordings, tracked runs and jobs", () => {
     const result = await cli(["db", "migrate"]);
     expect(result).toMatchObject({ code: 0 });
     expect(result.stderr).toContain(join(dataDir, "jobtrace.db"));
+  });
+});
+
+describe("saved logins and politeness", () => {
+  const recorder = { headless: true, openShadow: true };
+  const ui = (page: Page) => page.locator("#__jobtrace-overlay");
+  const logIn: MainIo["onAuthCapture"] = (capture) => {
+    void (async () => {
+      const { page } = capture;
+      await page.locator('input[name="username"]').fill(LOGIN_CREDENTIALS.username);
+      await page.locator('input[name="password"]').fill(LOGIN_CREDENTIALS.password);
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await page.getByTestId("signed-in").waitFor();
+      await ui(page).locator('[data-action="auth-save"]').click();
+    })();
+  };
+  let boardId = "";
+
+  it("auth create saves a login without recording the password", async () => {
+    const created = await cli(
+      ["auth", "create", "Acme intranet", "--url", sites.url(`${SITES.login}signin`)],
+      {
+        recorder,
+        onAuthCapture: logIn,
+      },
+    );
+    expect(created.code).toBe(0);
+    const id = created.stdout.trim();
+    expect(id).toMatch(/^auth_/);
+    expect(created.stderr).toContain('Saved login "Acme intranet" for 127.0.0.1');
+
+    const file = join(dataDir, "auth", `${id}.json`);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    const state = readFileSync(file, "utf8");
+    expect(state).toContain("jobtrace_session");
+    expect(state + created.stderr + created.stdout).not.toContain(LOGIN_CREDENTIALS.password);
+
+    const list = await cli(["auth", "list"]);
+    expect(list.stdout).toMatch(
+      /Acme intranet\s+127\.0\.0\.1\s+\S+ \S+\s+not checked yet\s+0 recordings/,
+    );
+    expect(
+      (await cli(["auth", "create", "acme intranet", "--url", sites.url(SITES.login)])).stderr,
+    ).toMatch(/already exists\. Use: jobtrace auth refresh/);
+  });
+
+  it("record --auth starts logged in and stores the logged-in check", async () => {
+    const recorded = await cli(
+      ["record", sites.url(SITES.login), "--auth", "Acme intranet", "--name", "Internal board"],
+      {
+        recorder,
+        onSession: (session) => {
+          void (async () => {
+            const { page } = session;
+            const press = (action: string) => ui(page).locator(`[data-action="${action}"]`).click();
+            // Already signed in: the board is there, not the sign-in form.
+            await page.locator("li.job").first().waitFor();
+            await press("auth-check");
+            await page.getByTestId("signed-in").click();
+            await expect.poll(() => session.status().auth).toEqual({ hasCheck: true });
+            await press("list");
+            await page.locator("li.job .loc").first().click();
+            await press("list-use");
+            await expect.poll(() => session.status().scope).toBe("list");
+            await page.locator("li.job .title").first().click();
+            await press("save");
+            await expect.poll(() => session.status().fields).toEqual(["title"]);
+            await press("stop");
+          })();
+        },
+      },
+    );
+    expect(recorded.code).toBe(0);
+    expect(recorded.stderr).toContain('Logged in as "Acme intranet"');
+    expect(recorded.stderr).not.toContain("no logged-in check");
+    boardId = recorded.stdout.trim();
+    const definition = JSON.parse((await cli(["recordings", "export", boardId])).stdout);
+    expect(definition.authProfileId).toMatch(/^auth_/);
+    expect(definition.loggedInCheck.locators[0]).toEqual({ kind: "testId", value: "signed-in" });
+    expect((await cli(["auth", "list"])).stdout).toMatch(/1 recording\b/);
+  });
+
+  it("run uses the saved login, and reports an expired one with what to do", async () => {
+    const working = await cli(["run", boardId]);
+    expect(working.code).toBe(0);
+    expect(JSON.parse(working.stdout).map((job: { title: string }) => job.title)).toEqual(
+      jobsFor("login").map((job) => job.title),
+    );
+    expect((await cli(["auth", "list"])).stdout).not.toContain("not checked yet");
+
+    await fetch(sites.url(`${SITES.login}__invalidate`), { method: "POST" });
+    const expired = await cli(["run", boardId, "--summary"]);
+    expect(expired.code).toBe(1);
+    expect(JSON.parse(expired.stdout).run).toMatchObject({
+      status: "failed",
+      reason: "auth_expired",
+    });
+    expect(expired.stderr).toMatch(/saved login has expired/);
+    expect(expired.stderr).toContain('Renew the login with: jobtrace auth refresh "Acme intranet"');
+  }, 60_000);
+
+  it("auth refresh renews the session, and auth delete removes it", async () => {
+    const refreshed = await cli(
+      ["auth", "refresh", "acme intranet", "--url", sites.url(`${SITES.login}signin`)],
+      {
+        recorder,
+        onAuthCapture: logIn,
+      },
+    );
+    expect(refreshed.code).toBe(0);
+    expect((await cli(["run", boardId])).code).toBe(0);
+
+    const cancelled = await cli(
+      ["auth", "refresh", "Acme intranet", "--url", sites.url(SITES.login)],
+      {
+        recorder,
+        onAuthCapture: (capture) => void capture.cancel(),
+      },
+    );
+    expect(cancelled).toMatchObject({ code: 1, stdout: "" });
+    expect(cancelled.stderr).toContain("Cancelled; nothing was saved.");
+
+    const id = JSON.parse((await cli(["auth", "list", "--json"])).stdout)[0].id as string;
+    expect((await cli(["auth", "delete", "Acme intranet"])).code).toBe(0);
+    expect(existsSync(join(dataDir, "auth", `${id}.json`))).toBe(false);
+    expect((await cli(["auth", "list"])).stderr).toContain("No saved logins");
+    const orphaned = await cli(["run", boardId]);
+    expect(orphaned.code).toBe(1);
+    expect(orphaned.stderr).toMatch(/auth profile that no longer exists/);
+    expect((await cli(["record", sites.url(SITES.login), "--auth", "nope"])).stderr).toMatch(
+      /No auth profile matches/,
+    );
+  }, 60_000);
+
+  it("run reports a robots.txt refusal and a bot wall, with the screenshot's path", async () => {
+    const file = (name: string, path: string) => {
+      const target = join(dataDir, `${name}.jobtrace.json`);
+      writeFileSync(
+        target,
+        JSON.stringify({
+          schemaVersion: 2,
+          id: `rec_${name}`,
+          name,
+          startUrl: sites.url(path),
+          settings: { minDelayMs: 0, maxDelayMs: 0 },
+          steps: [{ id: "s1", type: "navigate", url: sites.url(path) }],
+        }),
+      );
+      return target;
+    };
+    await cli(["recordings", "import", file("disallowed", SITES.robotsDisallowed)]);
+    const refused = await cli(["run", "disallowed"]);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toMatch(/failed: 0 job/);
+    expect(refused.stderr).toMatch(/robots\.txt disallows \/disallowed\//);
+    // The same recording as a one-off file run is refused as well.
+    expect((await cli(["run", file("disallowed", SITES.robotsDisallowed)])).stderr).toMatch(
+      /robots\.txt disallows/,
+    );
+
+    await cli(["recordings", "import", file("walled", SITES.botWall)]);
+    const blocked = await cli(["run", "walled"]);
+    expect(blocked.code).toBe(1);
+    expect(blocked.stderr).toMatch(/blocked: 0 job/);
+    expect(blocked.stderr).toMatch(/anti-bot check/);
+    const shot = /Screenshot: (\S+\.png)/.exec(blocked.stderr)?.[1] ?? "";
+    expect(existsSync(shot)).toBe(true);
+    expect((await cli(["runs", "list"])).stdout).toMatch(/walled\s+blocked \(bot_wall\)/);
   });
 });
 

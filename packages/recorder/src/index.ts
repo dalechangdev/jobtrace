@@ -1,3 +1,9 @@
+export {
+  type AuthCapture,
+  type AuthCaptureOptions,
+  type AuthCaptureResult,
+  captureAuth,
+} from "./auth.ts";
 export { injectedScript } from "./bundle.ts";
 export { API_NAME, OVERLAY_ID } from "./injected/protocol.ts";
 export {

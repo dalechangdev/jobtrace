@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  CURRENT_SCHEMA_VERSION,
   type Field,
   JobTraceError,
   type Locator,
@@ -55,6 +56,8 @@ export interface RecorderOptions {
   browser?: Browser;
   /** Path to a Playwright storage state file (an auth profile). */
   storageState?: string;
+  /** Id of the auth profile behind `storageState`; stored in the recording. */
+  authProfileId?: string;
   /** Tests only: open the overlay's shadow root so its buttons can be clicked by a script. */
   openShadow?: boolean;
   onEvent?: (event: RecorderEvent) => void;
@@ -200,6 +203,8 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
   /** Open scopes, innermost last. At most a list with a detail page inside it. */
   const scopes: Array<ListScope | DetailScope> = [];
   let hasList = false;
+  /** With an auth profile: the element that proves "logged in", once marked. */
+  let loggedInCheck: Target | undefined;
   /** The frame that proposed list candidates and awaits the user's choice. */
   let listPickFrame: Frame | undefined;
   /** True while the recorder itself navigates (back to the list); nothing is recorded then. */
@@ -244,6 +249,7 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
         ? { list: { locators: scope.target.locators, count: scope.count } }
         : {}),
       hasList,
+      ...(options.authProfileId ? { auth: { hasCheck: loggedInCheck !== undefined } } : {}),
     };
   };
   const enqueue = (task: () => Promise<void>) => {
@@ -496,7 +502,9 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
               ? scope === "list"
               : message.mode === "markNext"
                 ? hasList && scope !== "detail"
-                : true;
+                : message.mode === "markLoggedIn"
+                  ? options.authProfileId !== undefined && scope === "none"
+                  : true;
         if (!allowed) return undefined;
         emit("info", "mode", message.mode);
         setMode(message.mode);
@@ -537,6 +545,21 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
         enqueue(() => onDetailPick(frame, message));
         return undefined;
       }
+      case "loggedInPick":
+        if (!options.authProfileId) return undefined;
+        enqueue(async () => {
+          const target = await toTarget(frame, message.target, message.ref);
+          if (!target)
+            return toast(page, "Could not find a reliable way to locate that element.", "warn");
+          loggedInCheck = target;
+          emit("info", "auth", "Logged-in check marked");
+          toast(page, "Saved. Runs will stop with a clear message when this element is missing.");
+          setMode("record");
+        });
+        return undefined;
+      case "authSave":
+      case "authCancel":
+        return undefined;
       case "nextPick":
         if (!hasList) return undefined;
         enqueue(() => onNextPick(frame, page, message));
@@ -693,10 +716,12 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
     }
     try {
       const recording = parseRecording({
-        schemaVersion: 1,
+        schemaVersion: CURRENT_SCHEMA_VERSION,
         id: options.id ?? newId("recording"),
         name: options.name?.trim() || lastTitle || host,
         startUrl: firstUrl?.type === "navigate" ? firstUrl.url : options.url,
+        ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
+        ...(loggedInCheck ? { loggedInCheck } : {}),
         steps,
       });
       return { recording, samples, warnings };

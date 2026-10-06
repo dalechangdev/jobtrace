@@ -42,6 +42,16 @@ export interface RecordingVersion {
   note: string | null;
 }
 
+/** A saved browser login. The session itself is in the file; this row only points to it. */
+export interface AuthProfile {
+  id: string;
+  name: string;
+  domain: string;
+  storageStatePath: string;
+  createdAt: string;
+  lastVerifiedAt: string | null;
+}
+
 export type RunTrigger = "manual" | "schedule" | "cli";
 
 /** Run stats as stored: the runner's, plus what persistence learned about the jobs. */
@@ -168,6 +178,17 @@ export interface Database {
     list(filter?: JobFilter): Promise<JobRecord[]>;
     count(filter?: JobFilter): Promise<number>;
     get(id: string): Promise<JobRecord | null>;
+  };
+  authProfiles: {
+    /** Inserts the profile, or updates the one with the same id. Names are unique. */
+    save(profile: Omit<AuthProfile, "createdAt" | "lastVerifiedAt">): Promise<AuthProfile>;
+    get(id: string): Promise<AuthProfile | null>;
+    /** Finds a profile by id or exact name. Throws NOT_FOUND. */
+    resolve(ref: string): Promise<AuthProfile>;
+    list(): Promise<Array<AuthProfile & { usedBy: number }>>;
+    /** Records that a run just found the saved login to be working. */
+    markVerified(id: string, at?: Date): Promise<void>;
+    delete(id: string): Promise<void>;
   };
   artifacts: {
     add(runId: string, artifacts: readonly RunArtifact[], at?: Date): Promise<void>;

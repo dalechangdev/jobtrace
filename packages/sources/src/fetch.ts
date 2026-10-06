@@ -6,12 +6,14 @@ import {
   type FinalRunStatus,
   JobTraceError,
   type NormalizedJob,
+  type RobotsPolicy,
   type RunEvent,
   type RunEventLevel,
   type RunResult,
   toJobTraceError,
 } from "@jobtrace/core";
 import { dedupeJobs, normalizeRecord } from "@jobtrace/extractor";
+import { retryAfterMs } from "@jobtrace/politeness";
 import { ZodError } from "zod";
 import { ashby } from "./adapters/ashby.ts";
 import { greenhouse } from "./adapters/greenhouse.ts";
@@ -30,6 +32,8 @@ export interface FetchSourceOptions {
   onEvent?: (event: RunEvent) => void;
   /** Reference time for relative dates. Defaults to the run start. */
   now?: Date;
+  /** robots.txt knowledge; consulted when the source has `respectRobotsTxt`. */
+  robots?: RobotsPolicy;
   requestTimeoutMs?: number;
   /** A Retry-After longer than this ends the run instead of waiting. */
   maxRetryWaitMs?: number;
@@ -37,15 +41,6 @@ export interface FetchSourceOptions {
   maxRetries?: number;
   /** Wait used when a 429 or 503 carries no Retry-After. */
   defaultRetryWaitMs?: number;
-}
-
-/** Retry-After as milliseconds: either seconds or an HTTP date. */
-export function retryAfterMs(header: string | null, now: number = Date.now()): number | null {
-  if (!header) return null;
-  const seconds = Number(header);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
-  const date = Date.parse(header);
-  return Number.isNaN(date) ? null : Math.max(0, date - now);
 }
 
 /**
@@ -96,6 +91,16 @@ export async function fetchSource(
   });
 
   try {
+    if (options.robots && source.settings.respectRobotsTxt) {
+      const verdict = await options.robots.check(url);
+      if (!verdict.allowed) {
+        throw new JobTraceError(
+          "ROBOTS_DISALLOWED",
+          `${verdict.reason ?? `robots.txt disallows ${url}`}. To read the feed anyway, set respectRobotsTxt to false in the source's settings.`,
+          { details: { url } },
+        );
+      }
+    }
     let payload: unknown;
     for (let attempt = 0; ; attempt++) {
       if (options.signal?.aborted) throw cancelled();

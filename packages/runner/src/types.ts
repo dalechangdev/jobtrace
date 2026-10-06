@@ -1,4 +1,4 @@
-import type { LocatorResolver, RecordingSettings, RunEvent } from "@jobtrace/core";
+import type { LocatorResolver, RecordingSettings, RobotsPolicy, RunEvent } from "@jobtrace/core";
 import type { Browser } from "playwright";
 
 /** Timing knobs that are not part of the recording. Mostly overridden by tests. */
@@ -28,6 +28,10 @@ export interface RunTuning {
   maxConsecutiveItemErrors: number;
   /** Cap on failure screenshots and DOM snapshots per run. */
   maxFailureCaptures: number;
+  /** A 429 asking to wait longer than this ends the run instead of waiting. */
+  maxRetryAfterMs: number;
+  /** A robots.txt Crawl-delay above this is capped (and reported). */
+  maxCrawlDelayMs: number;
 }
 
 export const DEFAULT_TUNING: RunTuning = {
@@ -42,6 +46,8 @@ export const DEFAULT_TUNING: RunTuning = {
   detailOpenMs: 5000,
   maxConsecutiveItemErrors: 5,
   maxFailureCaptures: 10,
+  maxRetryAfterMs: 60_000,
+  maxCrawlDelayMs: 30_000,
 };
 
 export const DEFAULT_RUN_TIMEOUT_MS = 30 * 60_000;
@@ -61,6 +67,11 @@ export interface RunOptions {
   runTimeoutMs?: number;
   /** Called for every run event as it happens, e.g. to log or persist it. */
   onEvent?: (event: RunEvent) => void;
+  /**
+   * robots.txt knowledge. When given and the recording has `respectRobotsTxt`,
+   * a disallowed URL ends the run with `robots_disallowed`.
+   */
+  robots?: RobotsPolicy;
   /** Last-resort locator healing (the optional AI fallback plugin). */
   locatorResolver?: LocatorResolver;
   /** Reuse an existing browser instead of launching one. It is left open. */

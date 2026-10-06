@@ -6,11 +6,13 @@ import { CURRENT_SCHEMA_VERSION, type Recording, recordingSchema } from "../reco
 export type Migration = (document: Record<string, unknown>) => Record<string, unknown>;
 
 /**
- * Migrations keyed by the version they upgrade *from*. Version 1 is the first
- * format, so there are none yet. Add `1: (doc) => ({ ...doc, schemaVersion: 2 })`
- * style entries here when the format changes.
+ * Migrations keyed by the version they upgrade *from*. Each returns the
+ * document in the next version's shape; the version number is set for it.
  */
-export const MIGRATIONS: Readonly<Record<number, Migration>> = {};
+export const MIGRATIONS: Readonly<Record<number, Migration>> = {
+  // 1 -> 2 only added an optional field, so version 1 documents are valid as they are.
+  1: (document) => document,
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

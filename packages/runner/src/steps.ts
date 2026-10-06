@@ -8,8 +8,10 @@ import {
   toJobTraceError,
 } from "@jobtrace/core";
 import { absoluteUrl, applyTransforms } from "@jobtrace/extractor";
+import { retryAfterMs } from "@jobtrace/politeness";
 import type { Locator, Page, Response } from "playwright";
 import { captureFailure } from "./artifacts.ts";
+import { botWallOn, checkRobots, refusal } from "./guards.ts";
 import { resolveTarget } from "./locators.ts";
 import {
   checkAbort,
@@ -46,6 +48,7 @@ export async function runSteps(
 ): Promise<void> {
   for (const step of steps) {
     checkAbort(state);
+    state.activePage = scope.page;
     emit(state, "debug", "step_start", `${step.type} ${step.id}`, { stepId: step.id });
     try {
       await runStep(state, scope, step);
@@ -53,7 +56,9 @@ export async function runSteps(
       if (thrown instanceof StopRun) throw thrown;
       // An abort closes the browser context; report the abort, not the resulting noise.
       checkAbort(state);
-      const error = toJobTraceError(thrown);
+      let error = toJobTraceError(thrown);
+      // "Element not found" on a page that turned into a challenge is really a block.
+      if (!isRunLevelError(error)) error = (await botWallOn(state, scope.page, step.id)) ?? error;
       error.stepId ??= step.id;
       if (!state.captured.has(error) && !isRunLevelError(error)) {
         state.captured.add(error);
@@ -135,36 +140,96 @@ async function runStep(state: RunState, scope: Scope, step: Step): Promise<void>
   }
 }
 
+/**
+ * Loads a URL, as every runner-initiated navigation does. Checks robots.txt
+ * first, waits out a 429 once if the site says for how long, treats a refusal
+ * or an anti-bot page as the end of the run, and runs the logged-in check after
+ * the run's first page.
+ */
 async function goto(
   state: RunState,
   page: Page,
   url: string,
   stepId: string,
 ): Promise<Response | null> {
-  await pace(state);
-  let response: Response | null;
+  await checkRobots(state, url, stepId);
+  let response: Response | null = null;
+  state.navigating.add(page);
   try {
-    response = await page.goto(url, { timeout: state.settings.stepTimeoutMs, waitUntil: "load" });
-  } catch (error) {
-    checkAbort(state);
+    for (let attempt = 0; ; attempt++) {
+      await pace(state);
+      try {
+        response = await page.goto(url, {
+          timeout: state.settings.stepTimeoutMs,
+          waitUntil: "load",
+        });
+      } catch (error) {
+        checkAbort(state);
+        throw new JobTraceError(
+          "NAVIGATION_FAILED",
+          `Could not load ${url}: ${(error as Error).message.split("\n")[0]}`,
+          { stepId, cause: error, details: { url } },
+        );
+      }
+      const status = response?.status() ?? 0;
+      if (status === 429 && attempt === 0) {
+        const wait = retryAfterMs(response?.headers()["retry-after"]);
+        if (wait !== null && wait <= state.tuning.maxRetryAfterMs) {
+          emit(
+            state,
+            "warn",
+            "rate_limited",
+            `HTTP 429; waiting ${Math.ceil(wait / 1000)}s as asked, then trying once more`,
+            {
+              stepId,
+              data: { url, waitMs: wait },
+            },
+          );
+          await sleep(state, wait);
+          continue;
+        }
+      }
+      if (status === 403 || status === 429) {
+        const error = refusal(status, url, stepId);
+        state.captured.add(error);
+        await captureFailure(state, page, stepId);
+        throw error;
+      }
+      if (status >= 400) {
+        throw new JobTraceError("NAVIGATION_FAILED", `${url} responded with HTTP ${status}`, {
+          stepId,
+          details: { url, status },
+        });
+      }
+      break;
+    }
+  } finally {
+    state.navigating.delete(page);
+  }
+  const wall = await botWallOn(state, page, stepId);
+  if (wall) throw wall;
+  await checkLoggedIn(state, page, stepId);
+  return response;
+}
+
+/** After the run's first page: is the element that proves "logged in" there? */
+async function checkLoggedIn(state: RunState, page: Page, stepId: string): Promise<void> {
+  const marker = state.recording.loggedInCheck;
+  if (!marker || state.authChecked) return;
+  state.authChecked = true;
+  const found = await resolveTarget(state, { page, record: newRecord(page.url()) }, marker, {
+    stepId,
+    list: true,
+    optional: true,
+  });
+  if (!found) {
     throw new JobTraceError(
-      "NAVIGATION_FAILED",
-      `Could not load ${url}: ${(error as Error).message.split("\n")[0]}`,
-      {
-        stepId,
-        cause: error,
-        details: { url },
-      },
+      "AUTH_EXPIRED",
+      "The page does not show that you are logged in: the saved login has expired or was never valid here. Refresh the auth profile and run again.",
+      { stepId, details: { url: page.url(), authProfileId: state.recording.authProfileId } },
     );
   }
-  const status = response?.status() ?? 0;
-  if (status >= 400) {
-    throw new JobTraceError("NAVIGATION_FAILED", `${url} responded with HTTP ${status}`, {
-      stepId,
-      details: { url, status },
-    });
-  }
-  return response;
+  emit(state, "info", "auth_verified", "Logged-in check passed", { stepId });
 }
 
 function scrollPageToBottom(page: Page): Promise<void> {

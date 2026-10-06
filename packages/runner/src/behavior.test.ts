@@ -46,7 +46,7 @@ function recording(
   extra: Partial<RecordingInput> = {},
 ): Recording {
   return parseRecording({
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "rec_behavior",
     name: "Behavior test",
     startUrl: sites.url(path),

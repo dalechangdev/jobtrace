@@ -8,6 +8,8 @@ import type { Logger } from "./logger.ts";
 
 export interface RecordCommandOptions {
   name?: string;
+  /** Name or id of an auth profile to record with. */
+  auth?: string;
   out?: string;
   force?: boolean;
 }
@@ -74,8 +76,17 @@ export async function recordCommand(
     );
   }
 
+  const profile = options.auth ? await io.database().authProfiles.resolve(options.auth) : null;
+  if (profile && !existsSync(profile.storageStatePath)) {
+    throw new JobTraceError(
+      "AUTH_EXPIRED",
+      `The saved login "${profile.name}" is missing its session file. Run: jobtrace auth refresh "${profile.name}"`,
+    );
+  }
+
   const session = await startRecording({
     url,
+    ...(profile ? { storageState: profile.storageStatePath, authProfileId: profile.id } : {}),
     ...(options.name ? { name: options.name } : {}),
     ...(io.signal ? { signal: io.signal } : {}),
     ...io.recorder,
@@ -85,7 +96,10 @@ export async function recordCommand(
     "Recording. Use the toolbar in the browser window:\n" +
       "  Record      capture clicks, typing and navigation\n" +
       "  Mark field  click a piece of data (title, location, ...) to extract it\n" +
-      "  Stop        finish and save (Ctrl+C here or closing the window also works)\n",
+      "  Stop        finish and save (Ctrl+C here or closing the window also works)\n" +
+      (profile
+        ? `Logged in as "${profile.name}". Use Logged-in check to mark something only visible when\nlogged in (your account menu, a Sign out link), so expired logins are reported clearly.\n`
+        : ""),
   );
   io.onSession?.(session);
   const { recording, samples, warnings } = await session.finished;
@@ -109,6 +123,11 @@ export async function recordCommand(
     io.stderr.write(`  ${name}: ${preview.length > 70 ? `${preview.slice(0, 70)}…` : preview}\n`);
   }
   for (const warning of warnings) io.stderr.write(`warning: ${warning}\n`);
+  if (profile && !recording.loggedInCheck) {
+    io.stderr.write(
+      "warning: no logged-in check was marked. When this login expires, runs will fail with a less clear error.\n",
+    );
+  }
   if (fields.length === 0) {
     io.stderr.write(
       "warning: no fields were marked, so replaying this recording will not extract any jobs.\n",

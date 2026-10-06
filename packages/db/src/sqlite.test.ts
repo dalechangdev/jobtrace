@@ -376,6 +376,44 @@ describe("artifacts", () => {
   });
 });
 
+describe("auth profiles", () => {
+  const profile = (id: string, name: string) => ({
+    id,
+    name,
+    domain: "careers.acme.example",
+    storageStatePath: `/data/auth/${id}.json`,
+  });
+
+  it("saves, resolves, lists with usage, verifies and deletes", async () => {
+    const saved = await db.authProfiles.save(profile("auth_1", "Acme"));
+    expect(saved).toMatchObject({ id: "auth_1", name: "Acme", lastVerifiedAt: null });
+    expect((await db.authProfiles.resolve("acme")).id).toBe("auth_1");
+    expect((await db.authProfiles.resolve("auth_1")).name).toBe("Acme");
+    await expect(db.authProfiles.resolve("nope")).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(db.authProfiles.save(profile("auth_2", "Acme"))).rejects.toThrow(/already exists/);
+
+    await db.recordings.save({ ...recording("rec_a"), authProfileId: "auth_1" });
+    // A profile id unknown to this database is kept in the definition but not linked.
+    await db.recordings.save({ ...recording("rec_b", "Other"), authProfileId: "auth_elsewhere" });
+    expect(await db.authProfiles.list()).toMatchObject([{ name: "Acme", usedBy: 1 }]);
+    const other = await db.recordings.get("rec_b");
+    expect(other?.kind === "browser" && other.recording.authProfileId).toBe("auth_elsewhere");
+
+    await db.authProfiles.markVerified("auth_1");
+    expect((await db.authProfiles.get("auth_1"))?.lastVerifiedAt).not.toBeNull();
+    // Saving again (a refresh) resets the verification, keeping the creation time.
+    const refreshed = await db.authProfiles.save(profile("auth_1", "Acme"));
+    expect(refreshed).toMatchObject({ lastVerifiedAt: null, createdAt: saved.createdAt });
+
+    await db.authProfiles.delete("auth_1");
+    expect(await db.authProfiles.get("auth_1")).toBeNull();
+    expect(await db.authProfiles.list()).toEqual([]);
+    // The recording survives; its definition still names the profile it needs.
+    const orphan = await db.recordings.get("rec_a");
+    expect(orphan?.kind === "browser" && orphan.recording.authProfileId).toBe("auth_1");
+  });
+});
+
 describe("database file", () => {
   it("creates the file, migrates once, and keeps data across reopen", async () => {
     const dir = mkdtempSync(join(tmpdir(), "jobtrace-db-"));

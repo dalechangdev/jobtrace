@@ -34,8 +34,15 @@ export const FIELD_NAME_CHOICES = [
  *  - markList: pick one item of a repeating list
  *  - openDetail: follow an item's link to its detail page
  *  - markNext: pick the next-page control
+ *  - markLoggedIn: pick an element that proves the user is logged in
  */
-export type RecorderMode = "record" | "markField" | "markList" | "openDetail" | "markNext";
+export type RecorderMode =
+  | "record"
+  | "markField"
+  | "markList"
+  | "openDetail"
+  | "markNext"
+  | "markLoggedIn";
 /** The innermost construct being recorded into. */
 export type ScopeKind = "none" | "list" | "detail";
 export type ListChoice = "use" | "wider" | "narrower" | "cancel";
@@ -109,6 +116,10 @@ export type PageMessage =
       href?: string;
     }
   | { kind: "nextPick"; ref: ElementRef; target: WireTarget }
+  | { kind: "loggedInPick"; ref: ElementRef; target: WireTarget }
+  /** Auth capture only: the user is done logging in, or gave up. */
+  | { kind: "authSave" }
+  | { kind: "authCancel" }
   | { kind: "setPagination"; mode: "infiniteScroll" }
   | { kind: "finishScope" }
   | { kind: "notice"; text: string; level: "info" | "warn" }
@@ -127,6 +138,8 @@ export interface RecorderStatus {
   list?: { locators: Locator[]; count: number };
   /** True once any list was marked; pagination needs one. */
   hasList: boolean;
+  /** Present when recording with a saved login; says whether its logged-in check was marked. */
+  auth?: { hasCheck: boolean };
 }
 
 export type NodeMessage =
@@ -140,6 +153,11 @@ export type NodeMessage =
 export interface RecorderConfig {
   /** Tests open the overlay's shadow root so they can click its buttons. */
   openShadow?: boolean;
+  /**
+   * Auth capture: the page only shows a "Save login" bar. Nothing the user does
+   * or types is observed at all.
+   */
+  authCapture?: boolean;
 }
 
 /** The API the page script exposes on `window`. */

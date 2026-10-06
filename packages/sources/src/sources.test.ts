@@ -8,7 +8,7 @@ import {
   startTestSites,
 } from "@jobtrace/test-sites";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { fetchSource, retryAfterMs, USER_AGENT } from "./fetch.ts";
+import { fetchSource, USER_AGENT } from "./fetch.ts";
 
 let sites: RunningTestSites;
 beforeAll(async () => {
@@ -193,12 +193,23 @@ describe("politeness", () => {
     expect(capped.events.some((event) => event.type === "limit_reached")).toBe(true);
   });
 
-  it("parses Retry-After as seconds or as a date", () => {
-    const now = Date.parse("2026-10-06T12:00:00Z");
-    expect(retryAfterMs("30", now)).toBe(30_000);
-    expect(retryAfterMs("Tue, 06 Oct 2026 12:00:10 GMT", now)).toBe(10_000);
-    expect(retryAfterMs("Tue, 06 Oct 2026 11:00:00 GMT", now)).toBe(0);
-    expect(retryAfterMs("soon", now)).toBeNull();
-    expect(retryAfterMs(null)).toBeNull();
+  it("respects robots.txt unless the source opts out", async () => {
+    const closed = { check: async () => ({ allowed: false, reason: "robots.txt disallows /v0/" }) };
+    let requests = 0;
+    const counting: typeof fetch = (input, init) => {
+      requests++;
+      return fetch(input, init);
+    };
+    const refused = await fetchSource(source("lever"), { robots: closed, fetch: counting });
+    expect(refused).toMatchObject({
+      status: "failed",
+      reason: "robots_disallowed",
+      stats: { pages: 0 },
+    });
+    expect(requests).toBe(0);
+    const optedOut = await fetchSource(source("lever", "acme", { respectRobotsTxt: false }), {
+      robots: closed,
+    });
+    expect(optedOut.status).toBe("succeeded");
   });
 });

@@ -80,3 +80,30 @@ export interface LocatorResolverContext {
 export interface LocatorResolver {
   resolve(target: Target, context: LocatorResolverContext): Promise<ResolvedLocator | null>;
 }
+
+export interface RobotsVerdict {
+  allowed: boolean;
+  /** Why not, in words fit for an error message. */
+  reason?: string;
+  /** The site's requested minimum pause between requests, when it states one. */
+  crawlDelayMs?: number;
+}
+
+/** Answers whether a URL may be fetched according to the site's robots.txt. */
+export interface RobotsPolicy {
+  check(url: string): Promise<RobotsVerdict>;
+}
+
+/** What bot-wall detection looks at; collected from the live page by the runner. */
+export interface PageSnapshot {
+  url: string;
+  title: string;
+  /** The start of the page's visible text. */
+  text: string;
+  /** Length of the page's whole visible text. */
+  textLength: number;
+  /** Sources of iframes that are actually visible on the page. */
+  visibleFrameUrls: string[];
+  /** Other challenge traces: script sources and widget markers found in the page. */
+  challengeMarkers: string[];
+}

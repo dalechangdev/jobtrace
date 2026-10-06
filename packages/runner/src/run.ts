@@ -11,6 +11,8 @@ import {
 } from "@jobtrace/core";
 import { dedupeJobs, normalizeRecord } from "@jobtrace/extractor";
 import { type Browser, type BrowserContext, chromium } from "playwright";
+import { captureFailure } from "./artifacts.ts";
+import { watchPage } from "./guards.ts";
 import { checkAbort, emit, type RunState, StopRun } from "./state.ts";
 import { emitRecord, newRecord, runSteps } from "./steps.ts";
 import {
@@ -46,9 +48,10 @@ export async function runRecording(
 ): Promise<RunResult> {
   const startedAt = new Date();
   const now = options.now ?? startedAt;
-  const base: Pick<RunState, "events" | "options" | "timeoutSignal"> = {
+  const base: Pick<RunState, "events" | "options" | "timeoutSignal" | "guard"> = {
     events: [],
     options,
+    guard: { pending: [] },
     timeoutSignal: AbortSignal.timeout(options.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS),
   };
   const stats = { pages: 0, itemsSeen: 0, itemErrors: 0 };
@@ -96,8 +99,15 @@ export async function runRecording(
       stats,
       locatorMemo: new WeakMap(),
       captured: new WeakSet(),
+      navigating: new WeakSet(),
+      activePage: page,
+      authChecked: false,
       failureCaptures: 0,
     };
+    watchPage(state, page);
+    // Detail tabs and popups opened later are watched the same way.
+    const watching = state;
+    context.on("page", (opened) => watchPage(watching, opened));
     const root = newRecord(recording.startUrl);
     await runSteps(state, { page, record: root }, recording.steps);
     root.sourceUrl = page.url();
@@ -117,6 +127,17 @@ export async function runRecording(
         failure = toJobTraceError(thrown);
       } catch (abort) {
         failure = toJobTraceError(abort);
+      }
+      await Promise.allSettled(base.guard.pending);
+      // A block noticed by a page listener has no step to take its screenshot.
+      if (
+        state &&
+        failure.code === "BOT_WALL" &&
+        !state.captured.has(failure) &&
+        state.activePage
+      ) {
+        state.captured.add(failure);
+        await captureFailure(state, state.activePage, failure.stepId ?? "blocked");
       }
       emit(base, "error", "run_error", failure.message, {
         ...(failure.stepId === undefined ? {} : { stepId: failure.stepId }),

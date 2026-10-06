@@ -1,5 +1,5 @@
 {
-  "name": "@jobtrace/sources",
+  "name": "@jobtrace/politeness",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,9 +9,7 @@
   },
   "dependencies": {
     "@jobtrace/core": "workspace:*",
-    "@jobtrace/extractor": "workspace:*",
-    "@jobtrace/politeness": "workspace:*",
-    "zod": "^4.6.5"
+    "robots-parser": "^3.0.1"
   },
   "devDependencies": {
     "@jobtrace/test-sites": "workspace:*"

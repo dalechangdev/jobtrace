@@ -1,7 +1,9 @@
+import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { JobTraceError, type RunEvent, toJobTraceError } from "@jobtrace/core";
+import { JobTraceError, type RunEvent, type RunResult, toJobTraceError } from "@jobtrace/core";
 import type { Database, RunJobRecord, RunRecord, RunTrigger, StoredArtifact } from "@jobtrace/db";
+import type { Politeness } from "@jobtrace/politeness";
 import { type RunOptions, runRecording } from "@jobtrace/runner";
 import { type FetchSourceOptions, fetchSource } from "@jobtrace/sources";
 
@@ -18,10 +20,15 @@ export interface ExecuteRunOptions {
   scheduleId?: string;
   /** Execute this already-queued run instead of creating one. */
   runId?: string;
+  /**
+   * robots.txt knowledge and per-domain turns, shared by all runs of the
+   * process. Without it, runs neither check robots.txt nor wait for each other.
+   */
+  politeness?: Politeness;
   /** Options passed through to the replay engine (browser recordings). */
-  run?: Omit<RunOptions, "artifactsDir" | "onEvent">;
+  run?: Omit<RunOptions, "artifactsDir" | "onEvent" | "robots" | "storageState">;
   /** Options passed through to the feed reader (API sources). */
-  source?: Omit<FetchSourceOptions, "onEvent" | "signal" | "now">;
+  source?: Omit<FetchSourceOptions, "onEvent" | "signal" | "now" | "robots">;
   /** Called for every run event, after it was stored. */
   onEvent?: (event: RunEvent) => void;
 }
@@ -44,6 +51,45 @@ export async function removeRunArtifacts(
   await Promise.all(
     runIds.map((runId) => rm(artifactsDirFor(dataDir, runId), { recursive: true, force: true })),
   );
+}
+
+const note = (
+  level: RunEvent["level"],
+  type: string,
+  message: string,
+  data?: Record<string, unknown>,
+): RunEvent => ({ ts: new Date().toISOString(), level, type, message, ...(data ? { data } : {}) });
+
+/** The storage-state file of a recording's auth profile, or AUTH_EXPIRED when it is gone. */
+async function savedLogin(db: Database, authProfileId: string | null): Promise<string | null> {
+  if (!authProfileId) return null;
+  const profile = await db.authProfiles.get(authProfileId);
+  if (!profile || !existsSync(profile.storageStatePath)) {
+    throw new JobTraceError(
+      "AUTH_EXPIRED",
+      profile
+        ? `The saved login of auth profile "${profile.name}" is missing. Refresh the profile and run again.`
+        : "This recording uses an auth profile that no longer exists. Record it again with --auth, or create the profile.",
+      { details: { authProfileId } },
+    );
+  }
+  return profile.storageStatePath;
+}
+
+/** The result of a run that ended before anything was fetched. */
+function notStarted(error: JobTraceError): RunResult {
+  const at = new Date().toISOString();
+  return {
+    status: error.code === "RUN_CANCELLED" ? "cancelled" : "failed",
+    reason: error.code.toLowerCase(),
+    error: error.toJSON(),
+    jobs: [],
+    stats: { pages: 0, itemsSeen: 0, itemErrors: 0, jobs: 0, durationMs: 0 },
+    events: [],
+    artifacts: [],
+    startedAt: at,
+    finishedAt: at,
+  };
 }
 
 /**
@@ -80,21 +126,53 @@ export async function executeRun(
     options.onEvent?.(event);
   };
 
+  const robots = options.politeness ? { robots: options.politeness.robots } : {};
+  let release: (() => void) | undefined;
   try {
-    // The two kinds of source differ only in how the jobs are obtained.
-    const result =
-      stored.kind === "api"
-        ? await fetchSource(stored.source, {
-            ...options.source,
-            onEvent: record,
-            ...(options.run?.signal ? { signal: options.run.signal } : {}),
-            ...(options.run?.now ? { now: options.run.now } : {}),
-          })
-        : await runRecording(stored.recording, {
-            ...options.run,
-            artifactsDir: artifactsDirFor(options.dataDir, id),
-            onEvent: record,
-          });
+    let result: RunResult;
+    try {
+      // One run per site at a time: wait for any other run on the same domain.
+      if (options.politeness?.locks.isBusy(stored.domain)) {
+        record(note("info", "waiting", `Waiting for another run on ${stored.domain} to finish`));
+      }
+      release = await options.politeness?.locks.acquire(stored.domain, options.run?.signal);
+
+      // The two kinds of source differ only in how the jobs are obtained.
+      if (stored.kind === "api") {
+        result = await fetchSource(stored.source, {
+          ...options.source,
+          ...robots,
+          onEvent: record,
+          ...(options.run?.signal ? { signal: options.run.signal } : {}),
+          ...(options.run?.now ? { now: options.run.now } : {}),
+        });
+      } else {
+        const storageState = await savedLogin(db, stored.recording.authProfileId);
+        result = await runRecording(stored.recording, {
+          ...options.run,
+          ...robots,
+          ...(storageState ? { storageState } : {}),
+          artifactsDir: artifactsDirFor(options.dataDir, id),
+          onEvent: record,
+        });
+      }
+    } catch (error) {
+      // A problem before the run could start (no saved login, cancelled while
+      // waiting) is an ordinary failed run, not a crash.
+      if (
+        !(error instanceof JobTraceError) ||
+        !["AUTH_EXPIRED", "RUN_CANCELLED"].includes(error.code)
+      )
+        throw error;
+      result = notStarted(error);
+      record(note("error", "run_error", error.message, { error: error.toJSON() }));
+    } finally {
+      release?.();
+    }
+    const authProfileId = stored.kind === "browser" ? stored.recording.authProfileId : null;
+    if (authProfileId && result.events.some((event) => event.type === "auth_verified")) {
+      await db.authProfiles.markVerified(authProfileId);
+    }
 
     // Whatever the run managed to read was really on the site, so it is stored
     // even when the run then failed or was cancelled.

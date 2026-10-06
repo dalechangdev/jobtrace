@@ -10,11 +10,14 @@
   "dependencies": {
     "@jobtrace/core": "workspace:*",
     "@jobtrace/db": "workspace:*",
+    "@jobtrace/politeness": "workspace:*",
     "@jobtrace/runner": "workspace:*",
     "@jobtrace/sources": "workspace:*"
   },
   "devDependencies": {
     "@jobtrace/test-sites": "workspace:*",
-    "playwright": "^1.63.0"
+    "playwright": "^1.63.0",
+    "@jobtrace/recorder": "workspace:*",
+    "@jobtrace/politeness": "workspace:*"
   }
 }

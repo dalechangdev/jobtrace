@@ -10,6 +10,7 @@ import {
   type RunEvent,
   type RunStatus,
 } from "@jobtrace/core";
+import type { StoredRecording } from "@jobtrace/db";
 import { runRecording } from "@jobtrace/runner";
 import { executeRun } from "@jobtrace/scheduler";
 import { fetchSource } from "@jobtrace/sources";
@@ -80,10 +81,11 @@ export async function runCommand(
     const onEvent = (event: RunEvent) => ctx.logger.event(event);
     const result = await ctx.withInterrupt((signal) =>
       isApiSource(definition)
-        ? fetchSource(definition, { signal, onEvent })
+        ? fetchSource(definition, { signal, onEvent, robots: ctx.politeness.robots })
         : runRecording(definition, {
             ...shared,
             signal,
+            robots: ctx.politeness.robots,
             artifactsDir: options.artifacts ?? join(ctx.config.dataDir, "artifacts", newId("run")),
             onEvent,
           }),
@@ -93,9 +95,9 @@ export async function runCommand(
     return exitCodeFor(status);
   }
 
-  let recordingId: string;
+  let stored: StoredRecording;
   try {
-    recordingId = (await ctx.db.recordings.resolve(ref)).id;
+    stored = await ctx.db.recordings.resolve(ref);
   } catch (error) {
     if (!isJobTraceError(error, "NOT_FOUND")) throw error;
     throw new JobTraceError("NOT_FOUND", `${error.message}, and there is no such file either`);
@@ -107,10 +109,11 @@ export async function runCommand(
     );
   }
   const executed = await ctx.withInterrupt((signal) =>
-    executeRun(ctx.db, recordingId, {
+    executeRun(ctx.db, stored.id, {
       trigger: "cli",
       dataDir: ctx.config.dataDir,
       artifactRetentionRuns: ctx.config.artifactRetentionRuns,
+      politeness: ctx.politeness,
       run: { ...shared, signal },
       onEvent: (event) => ctx.logger.event(event),
     }),
@@ -120,6 +123,17 @@ export async function runCommand(
   ctx.stderr.write(
     `Run ${run.id} ${run.status}: ${jobs.length} job(s), ${stats?.newJobs ?? 0} new, ${stats?.changedJobs ?? 0} changed, ${stats?.closedJobs ?? 0} closed\n`,
   );
+  if (run.status !== "succeeded" && run.error) ctx.stderr.write(`${run.error.message}\n`);
+  if (run.reason === "auth_expired") {
+    const profileId = stored.kind === "browser" ? stored.recording.authProfileId : null;
+    const profile = profileId ? await ctx.db.authProfiles.get(profileId) : null;
+    if (profile)
+      ctx.stderr.write(`Renew the login with: jobtrace auth refresh "${profile.name}"\n`);
+  }
+  if (run.status === "blocked") {
+    const shot = artifacts.find((artifact) => artifact.type === "screenshot");
+    if (shot) ctx.stderr.write(`Screenshot: ${shot.path}\n`);
+  }
   print(options.summary ? { run, artifacts, jobs } : jobs);
   return exitCodeFor(run.status);
 }

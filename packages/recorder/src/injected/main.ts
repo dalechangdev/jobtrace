@@ -1,6 +1,6 @@
 import { installCapture } from "./capture.ts";
 import { cssFor, generateTarget } from "./locators.ts";
-import { createOverlay } from "./overlay.ts";
+import { createAuthBar, createOverlay } from "./overlay.ts";
 import {
   API_NAME,
   BRIDGE_NAME,
@@ -72,6 +72,17 @@ function init(win: RecorderWindow) {
     void bridge(message).catch(() => {});
   };
 
+  const config = win[CONFIG_NAME] ?? {};
+  if (config.authCapture) {
+    if (win.top === win) {
+      createAuthBar(config, {
+        onSave: () => send({ kind: "authSave" }),
+        onCancel: () => send({ kind: "authCancel" }),
+      });
+    }
+    return;
+  }
+
   let current: RecorderStatus = {
     mode: "record",
     steps: 0,
@@ -81,7 +92,7 @@ function init(win: RecorderWindow) {
   };
   const isTop = win.top === win;
   const overlay = createOverlay(
-    win[CONFIG_NAME] ?? {},
+    config,
     {
       onMode: (next) => send({ kind: "setMode", mode: next }),
       onStop: () => send({ kind: "stop" }),

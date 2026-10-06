@@ -42,7 +42,7 @@ const RECORDED_KEYS = new Set(["Enter", "Escape", "Tab"]);
 /** How long after a click on a non-interactive element to watch for any effect. */
 const EFFECT_WINDOW_MS = 400;
 /** Modes in which a click picks something and must not reach the page. */
-const PICKING = new Set(["markField", "markList", "markNext"]);
+const PICKING = new Set(["markField", "markList", "markNext", "markLoggedIn"]);
 
 function deepTarget(event: Event): Element | null {
   const first = event.composedPath()[0];
@@ -415,7 +415,15 @@ export function installCapture({
       if (type !== "click" || !element || isSensitive(element)) return;
       if (current === "markField") pickField(element);
       else if (current === "markList") pickList(element);
-      else pickNext(element);
+      else if (current === "markNext") pickNext(element);
+      else {
+        const marker = element.closest(INTERACTIVE) ?? element;
+        send({
+          kind: "loggedInPick",
+          ref: register(marker),
+          target: generateTarget(marker, "action"),
+        });
+      }
     });
   }
   listen("mousemove", (event) => {

@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   apiSourceFeedUrl,
+  type Definition,
   isApiSource,
   JobTraceError,
   type NormalizedJob,
@@ -18,6 +19,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "./schema.ts";
 import type {
+  AuthProfile,
   Database,
   JobFilter,
   JobRecord,
@@ -29,7 +31,8 @@ import type {
 } from "./types.ts";
 
 const MIGRATIONS = fileURLToPath(new URL("../migrations", import.meta.url));
-const { recordings, recordingVersions, runs, runEvents, jobs, runJobs, artifacts } = schema;
+const { authProfiles, recordings, recordingVersions, runs, runEvents, jobs, runJobs, artifacts } =
+  schema;
 
 type RunRow = typeof runs.$inferSelect;
 type JobRow = typeof jobs.$inferSelect;
@@ -112,6 +115,19 @@ function jobContent(job: NormalizedJob) {
     customJson: JSON.stringify(job.custom),
     contentHash: job.contentHash,
   };
+}
+
+type Reader = Pick<ReturnType<typeof drizzle<typeof schema>>, "select">;
+
+/** The auth profile a definition names, if that profile exists in this database. */
+function linkedProfile(db: Reader, definition: Definition): string | null {
+  if (isApiSource(definition) || !definition.authProfileId) return null;
+  const found = db
+    .select({ id: authProfiles.id })
+    .from(authProfiles)
+    .where(eq(authProfiles.id, definition.authProfileId))
+    .get();
+  return found ? found.id : null;
 }
 
 /** Turns free text into an FTS5 query: every word must match, as a prefix. */
@@ -236,6 +252,8 @@ export function openDatabase(url: string): Database {
             definitionJson,
             schemaVersion: definition.schemaVersion,
             updatedAt: now,
+            // Only link a profile that exists here; an imported recording may name one that does not.
+            authProfileId: linkedProfile(tx, definition),
           };
           const existing = tx
             .select({ id: recordings.id })
@@ -540,6 +558,76 @@ export function openDatabase(url: string): Database {
       async get(id) {
         const row = db.select().from(jobs).where(eq(jobs.id, id)).get();
         return row ? toJob(row) : null;
+      },
+    },
+
+    authProfiles: {
+      async save(profile) {
+        const existing = db
+          .select()
+          .from(authProfiles)
+          .where(eq(authProfiles.id, profile.id))
+          .get();
+        const taken = db
+          .select()
+          .from(authProfiles)
+          .where(eq(authProfiles.name, profile.name))
+          .get();
+        if (taken && taken.id !== profile.id) {
+          throw new JobTraceError(
+            "INVALID_ARGUMENT",
+            `An auth profile named "${profile.name}" already exists`,
+          );
+        }
+        if (existing) {
+          // A refreshed login has not been verified by a run yet.
+          db.update(authProfiles)
+            .set({ ...profile, lastVerifiedAt: null })
+            .where(eq(authProfiles.id, profile.id))
+            .run();
+        } else
+          db.insert(authProfiles)
+            .values({ ...profile, createdAt: iso() })
+            .run();
+        return db
+          .select()
+          .from(authProfiles)
+          .where(eq(authProfiles.id, profile.id))
+          .get() as AuthProfile;
+      },
+      async get(id) {
+        return db.select().from(authProfiles).where(eq(authProfiles.id, id)).get() ?? null;
+      },
+      async resolve(ref) {
+        const found =
+          db.select().from(authProfiles).where(eq(authProfiles.id, ref)).get() ??
+          db
+            .select()
+            .from(authProfiles)
+            .where(sql`lower(${authProfiles.name}) = lower(${ref})`)
+            .get();
+        if (!found) throw new JobTraceError("NOT_FOUND", `No auth profile matches "${ref}"`);
+        return found;
+      },
+      async list() {
+        return db
+          .select({
+            profile: authProfiles,
+            usedBy: sql<number>`(SELECT count(*) FROM recordings WHERE recordings.auth_profile_id = auth_profiles.id)`,
+          })
+          .from(authProfiles)
+          .orderBy(asc(authProfiles.name))
+          .all()
+          .map((row) => ({ ...row.profile, usedBy: row.usedBy }));
+      },
+      async markVerified(id, at) {
+        db.update(authProfiles)
+          .set({ lastVerifiedAt: iso(at) })
+          .where(eq(authProfiles.id, id))
+          .run();
+      },
+      async delete(id) {
+        db.delete(authProfiles).where(eq(authProfiles.id, id)).run();
       },
     },
 

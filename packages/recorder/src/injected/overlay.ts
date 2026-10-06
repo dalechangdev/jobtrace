@@ -39,6 +39,7 @@ const MODE_LABELS: Record<RecorderMode, string> = {
   markList: "Click one job in the list",
   openDetail: "Click a job's link to open it",
   markNext: "Click the next-page button",
+  markLoggedIn: "Click something only shown when logged in",
 };
 
 const CSS_TEXT = `
@@ -177,6 +178,9 @@ export function createOverlay(
   const scrollButton = button("scroll", "Infinite scroll", {
     title: "The list loads more jobs as you scroll",
   });
+  const authButton = button("auth-check", "Logged-in check", {
+    title: "Mark an element that is only there while you are logged in, such as your account menu",
+  });
   const finishButton = button("finish", "Finish");
   const stopButton = button("stop", "Stop", { class: "stop" });
   const moveButton = button("move", "⇅", { title: "Move toolbar" });
@@ -192,6 +196,7 @@ export function createOverlay(
     detailButton,
     nextButton,
     scrollButton,
+    authButton,
     finishButton,
     stopButton,
     moveButton,
@@ -333,6 +338,7 @@ export function createOverlay(
   listButton.addEventListener("click", () => handlers.onMode("markList"));
   detailButton.addEventListener("click", () => handlers.onMode("openDetail"));
   nextButton.addEventListener("click", () => handlers.onMode("markNext"));
+  authButton.addEventListener("click", () => handlers.onMode("markLoggedIn"));
   scrollButton.addEventListener("click", () => handlers.onInfiniteScroll());
   finishButton.addEventListener("click", () => handlers.onFinishScope());
   stopButton.addEventListener("click", () => handlers.onStop());
@@ -343,7 +349,7 @@ export function createOverlay(
   return {
     host,
     highlight,
-    setStatus({ mode, steps, fields, scope, list, hasList }) {
+    setStatus({ mode, steps, fields, scope, list, hasList, auth }) {
       usedFields = fields;
       bar.classList.toggle("marking", mode !== "record");
       label.textContent = MODE_LABELS[mode];
@@ -360,6 +366,7 @@ export function createOverlay(
         [listButton, "markList"],
         [detailButton, "openDetail"],
         [nextButton, "markNext"],
+        [authButton, "markLoggedIn"],
       ];
       for (const [node, value] of pressed)
         node.setAttribute("aria-pressed", String(mode === value));
@@ -367,6 +374,8 @@ export function createOverlay(
       listButton.hidden = scope !== "none";
       detailButton.hidden = scope !== "list";
       nextButton.hidden = scrollButton.hidden = scope === "detail" || !hasList;
+      authButton.hidden = !auth || scope !== "none";
+      authButton.textContent = auth?.hasCheck ? "Logged-in check ✓" : "Logged-in check";
       finishButton.hidden = scope === "none";
       finishButton.textContent = scope === "detail" ? "Back to list" : "Finish list";
       if (mode !== "markList" && listPending) {
@@ -419,4 +428,51 @@ export function createOverlay(
       );
     },
   };
+}
+
+/**
+ * The bar shown while capturing a login for an auth profile. It is the whole
+ * recorder UI in that mode: there is no capture, so nothing typed into the
+ * site's login form is ever seen.
+ */
+export function createAuthBar(
+  config: RecorderConfig,
+  handlers: { onSave(): void; onCancel(): void },
+): void {
+  const host = el("div", { id: OVERLAY_ID });
+  const shadow = host.attachShadow({ mode: config.openShadow ? "open" : "closed" });
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(CSS_TEXT);
+  shadow.adoptedStyleSheets = [sheet];
+  const save = el("button", { type: "button", "data-action": "auth-save", text: "Save login" });
+  const cancel = el("button", { type: "button", "data-action": "auth-cancel", text: "Cancel" });
+  const bar = el(
+    "div",
+    { class: "bar marking", role: "toolbar", "aria-label": "JobTrace login capture" },
+    el("span", { class: "dot" }),
+    el("strong", { text: "Log in as usual, then press Save login" }),
+    el("span", { class: "status", text: "Nothing you type is recorded" }),
+    save,
+    cancel,
+  );
+  shadow.append(bar);
+  save.addEventListener("click", () => handlers.onSave());
+  cancel.addEventListener("click", () => handlers.onCancel());
+  for (const type of [
+    "click",
+    "mousedown",
+    "mouseup",
+    "pointerdown",
+    "pointerup",
+    "keydown",
+    "keyup",
+  ]) {
+    host.addEventListener(type, (event) => event.stopPropagation());
+  }
+  const mount = () => {
+    if (!host.isConnected && document.documentElement) document.documentElement.append(host);
+  };
+  mount();
+  new MutationObserver(mount).observe(document, { childList: true, subtree: false });
+  document.addEventListener("DOMContentLoaded", mount);
 }

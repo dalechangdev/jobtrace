@@ -324,6 +324,13 @@ Locator ranking prefers stable signals: test ids, then ARIA role and name, then 
 
 ---
 
+### Decisions made while building M5
+- **Recording format version 2** adds the optional top-level `loggedInCheck` target. Version 1 files load unchanged through the (identity) migration.
+- **The logged-in check runs after the run's first page load**, not as a separate visit before the run. It is marked in the recorder with a "Logged-in check" button that only appears when recording with `--auth`. Without a check, an expired login shows up as an ordinary locator failure, so the CLI warns when none was marked.
+- **Login capture injects no recorder at all**: the page only gets a "Save login" bar, so nothing typed during login can be observed. The session file is written with mode `0600` in a `0700` directory.
+- A recording whose auth profile or session file is missing ends as `failed` / `auth_expired` without opening a browser.
+- `auth_profiles.last_verified_at` is set whenever a run's logged-in check passes, and reset when the profile is refreshed.
+
 ## 8. Replay engine (`packages/runner`)
 
 ### 8.1 Execution
@@ -364,6 +371,13 @@ Locator ranking prefers stable signals: test ids, then ARIA role and name, then 
   - HTTP 403/429 on main-frame navigations
   - known challenge page titles or text (e.g. "Just a moment", "Verify you are human")
   - On detection: screenshot, status `blocked`, stop. **No** retries that try to evade.
+- **Decisions made while building M5**:
+  - robots.txt follows RFC 9309: no robots.txt (any 4xx) means no restrictions; a robots.txt that cannot be retrieved (5xx or network error) means the site is treated as off limits. Rules are matched for the product token `JobTrace`, falling back to `*`. The cache is in memory and on disk under `DATA_DIR/cache/robots`, so separate CLI runs share it.
+  - Checked URLs: every navigation the runner starts, plus every main-frame URL a page navigates to by itself (a click, a redirect). A `Crawl-delay` raises the run's delays (capped at 30s).
+  - **429 with `Retry-After`**: the runner waits as asked (up to a minute) and tries once more; that is obeying the site, not evading it. A second 429, a 429 asking for longer, or any 403 ends the run as `blocked`.
+  - **Bot-wall detection is conservative about CAPTCHA widgets**, because ordinary pages embed them (application forms, login boxes). A challenge title or an active puzzle frame is enough on its own; a widget or challenge wording only counts on a page with little other text. When a step fails to find an element, the page is checked for a wall first, so a challenge is reported as `blocked` rather than as a missing locator.
+  - The per-domain lock is in-process (one `serve` process in v1). Two separate CLI invocations do not see each other's lock.
+  - Feed runs (M4b) now check robots.txt too. All three providers' API hosts currently allow the feed paths.
 - User agent: Playwright's default Chromium UA. No stealth plugins. Do not spoof fingerprints.
 - `README` includes a responsible-use section: respect site terms, keep volumes low, and use for personal job searching.
 

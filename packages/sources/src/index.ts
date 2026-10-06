@@ -6,6 +6,5 @@ export {
   ADAPTERS,
   type FetchSourceOptions,
   fetchSource,
-  retryAfterMs,
   USER_AGENT,
 } from "./fetch.ts";

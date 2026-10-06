@@ -11,7 +11,7 @@ const target = z.object({
   locators: z.array(locatorSchema).max(20),
   fingerprint: fingerprintSchema,
 });
-const mode = z.enum(["record", "markField", "markList", "openDetail", "markNext"]);
+const mode = z.enum(["record", "markField", "markList", "openDetail", "markNext", "markLoggedIn"]);
 const item = z.object({ index: z.number().int().nonnegative() });
 const level = z.enum(["info", "warn"]);
 
@@ -66,6 +66,9 @@ export const pageMessageSchema = z.discriminatedUnion("kind", [
     href: z.string().optional(),
   }),
   z.object({ kind: z.literal("nextPick"), ref, target }),
+  z.object({ kind: z.literal("loggedInPick"), ref, target }),
+  z.object({ kind: z.literal("authSave") }),
+  z.object({ kind: z.literal("authCancel") }),
   z.object({ kind: z.literal("setPagination"), mode: z.literal("infiniteScroll") }),
   z.object({ kind: z.literal("finishScope") }),
   z.object({ kind: z.literal("notice"), text: z.string().max(500), level }),

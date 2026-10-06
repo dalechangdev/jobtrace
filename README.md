@@ -7,7 +7,7 @@ source.
 > **Status: early.** You can record a job board with `jobtrace record`, replay it
 > with `jobtrace run`, and browse what it found, including which jobs are new or
 > changed since the last run (milestones M0–M4 of [PLAN.md](PLAN.md)). It is all
-> command-line for now: the web UI, scheduler and login support are not built yet.
+> command-line for now: the web UI and scheduler are not built yet.
 
 ## Quickstart
 
@@ -31,6 +31,7 @@ is stored in a SQLite database under `DATA_DIR` (default `~/.jobtrace`).
 | Command | What it does |
 |---|---|
 | `record <url>` | Record a board in a browser window and store the recording. |
+| `auth create` / `refresh` / `list` / `delete` | Saved logins for boards behind a sign-in. |
 | `source add <provider> <board>` | Add a Greenhouse, Lever or Ashby board, read through its public feed. |
 | `run <recording>` | Run a stored recording or source and track its jobs. |
 | `recordings list` / `show` / `export` / `import` / `delete` | Manage stored recordings. `export` and `import` use `.jobtrace.json` files, which can be shared or kept in Git. |
@@ -64,6 +65,27 @@ service answers "slow down" the run waits as asked (up to a minute) and retries;
 refuses, the run ends as `blocked`. Lever and Ashby feeds do not include the company
 name, hence `--company`. For Lever's EU instance pass
 `--base-url https://api.eu.lever.co`.
+
+### Boards behind a login
+
+```sh
+jobtrace auth create "Acme intranet" --url https://careers.acme.example/login
+jobtrace record https://careers.acme.example/internal --auth "Acme intranet"
+```
+
+`auth create` opens a browser on the login page. Log in as usual and press **Save
+login**. Only the resulting browser session (cookies and local storage) is saved, to
+`DATA_DIR/auth/`, readable by you alone; your password is never seen or stored.
+Recordings made with `--auth` replay with that session.
+
+While recording with `--auth`, press **Logged-in check** and click something that is
+only on the page when you are logged in, such as your account menu or a "Sign out"
+link. Runs then end with `auth_expired` and a clear message when the session has
+expired, and `jobtrace auth refresh "Acme intranet"` renews it. `auth list` shows your
+saved logins and when each last worked; `auth delete` removes one.
+
+Anyone who can read a saved session file can act as you on that site. See
+[SECURITY.md](SECURITY.md).
 
 ### New, changed and closed jobs
 
@@ -181,10 +203,23 @@ Environment: `DATA_DIR` (default `~/.jobtrace`) and `LOG_LEVEL` (default `info`;
 
 ## Responsible use
 
-JobTrace is meant for personal job searching. It waits a randomized delay between
-actions, does not solve CAPTCHAs, and does not use stealth or fingerprint-evasion
-techniques; when a site blocks automation, the run stops. Respect each site's terms
-of use and `robots.txt`, and keep request volumes low. See [SECURITY.md](SECURITY.md).
+JobTrace is meant for personal job searching, and is built to be a polite visitor:
+
+- **robots.txt is respected.** A run that would load a disallowed page ends with
+  `robots_disallowed` instead. If a site asks for a pause between requests
+  (`Crawl-delay`), runs slow down to it. A recording can opt out with
+  `"respectRobotsTxt": false` in its settings; that is your decision to make and to
+  answer for.
+- **It waits between actions**, a randomized 1–3 seconds by default.
+- **It stops when it is not wanted.** A CAPTCHA or "verify you are human" page, or an
+  HTTP 403, ends the run as `blocked` with a screenshot. If a site answers "too many
+  requests" and says how long to wait, the run waits that long (up to a minute) and
+  tries once more; otherwise it stops.
+- **It never tries to get past any of that.** No CAPTCHA solving, no stealth plugins,
+  no fingerprint spoofing, and the browser's normal user agent.
+
+Respect each site's terms of use and keep request volumes low. See
+[SECURITY.md](SECURITY.md).
 
 ## Troubleshooting
 
@@ -195,6 +230,13 @@ of use and `robots.txt`, and keep request volumes low. See [SECURITY.md](SECURIT
 - **`locator_drift` warnings**: the top-ranked locator stopped working and a fallback
   was used. The run still succeeds, but update the recording before the fallbacks
   break too.
+- **`blocked`**: the site showed an anti-bot check or refused the request. The
+  screenshot shows what it looked like. JobTrace will not work around it; if the
+  company's board is on Greenhouse, Lever or Ashby, `source add` reads its public
+  feed instead.
+- **`robots_disallowed`**: the site's robots.txt does not allow automated visits to
+  that page. See "Responsible use" above.
+- **`auth_expired`**: the saved login no longer works. Run `jobtrace auth refresh`.
 - **A run is slow**: recordings wait `minDelayMs`–`maxDelayMs` between actions on
   purpose. Optional fields that are missing also cost a short wait each.
 

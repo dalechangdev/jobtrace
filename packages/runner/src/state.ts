@@ -75,8 +75,26 @@ export interface RunState {
   locatorMemo: WeakMap<Target, number>;
   /** Errors whose failure artifacts were already captured. */
   captured: WeakSet<object>;
+  /** Pages currently inside a navigation the runner itself started. */
+  navigating: WeakSet<Page>;
+  /** The page steps last ran on, for a screenshot when the run is stopped from outside a step. */
+  activePage: Page | undefined;
+  /** Set once the logged-in check has run. */
+  authChecked: boolean;
   failureCaptures: number;
   timeoutSignal: AbortSignal;
+  guard: RunGuard;
+}
+
+/**
+ * A run-ending problem noticed outside of any step (by a page listener): a bot
+ * wall after a click, a disallowed URL the page navigated to. The next
+ * `checkAbort` raises it.
+ */
+export interface RunGuard {
+  fatal?: JobTraceError;
+  /** Screenshots being taken by listeners; the run waits for them before closing the browser. */
+  pending: Promise<void>[];
 }
 
 export function emit(
@@ -95,8 +113,9 @@ export function emit(
   }
 }
 
-/** Throws RUN_CANCELLED or RUN_TIMEOUT once the run has been aborted. */
-export function checkAbort(state: Pick<RunState, "options" | "timeoutSignal">): void {
+/** Throws once the run has been aborted, timed out, or stopped by a page guard. */
+export function checkAbort(state: Pick<RunState, "options" | "timeoutSignal" | "guard">): void {
+  if (state.guard.fatal) throw state.guard.fatal;
   if (state.options.signal?.aborted) {
     throw new JobTraceError("RUN_CANCELLED", "Run was cancelled");
   }

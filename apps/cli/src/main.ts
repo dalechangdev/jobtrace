@@ -1,6 +1,9 @@
+import { join } from "node:path";
 import { type Config, isJobTraceError, loadConfig } from "@jobtrace/core";
 import { type Database, openDatabase } from "@jobtrace/db";
+import { createPoliteness, type Politeness } from "@jobtrace/politeness";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
+import { registerAuth } from "./commands/auth.ts";
 import { registerJobs } from "./commands/jobs.ts";
 import { registerRecordings } from "./commands/recordings.ts";
 import { registerRuns } from "./commands/runs.ts";
@@ -31,6 +34,7 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
   let config: Config | undefined;
   let logger: Logger | undefined;
   let database: Database | undefined;
+  let politeness: Politeness | undefined;
 
   const ctx: CliContext = {
     stdout,
@@ -48,6 +52,10 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
     get db() {
       database ??= openDatabase(ctx.config.databaseUrl);
       return database;
+    },
+    get politeness() {
+      politeness ??= createPoliteness({ cacheDir: join(ctx.config.dataDir, "cache", "robots") });
+      return politeness;
     },
     async withInterrupt(command) {
       if (io.signal) return command(io.signal);
@@ -78,6 +86,10 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
     .description("Open a browser, record how you reach the jobs, and store the recording")
     .argument("<url>", "career page to start from")
     .option("--name <name>", "name of the recording (default: the page title)")
+    .option(
+      "--auth <profile>",
+      "record while logged in with a saved login (see: jobtrace auth create)",
+    )
     .option("--out <file>", "write a .jobtrace.json file instead of storing the recording")
     .option("--force", "with --out: overwrite the file if it exists")
     .action(async (url: string, options) => {
@@ -113,6 +125,7 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
       exitCode = await runCommand(ref, options, ctx);
     });
 
+  registerAuth(program, ctx);
   registerSource(program, ctx);
   registerRecordings(program, ctx);
   registerRuns(program, ctx, positiveInt);
