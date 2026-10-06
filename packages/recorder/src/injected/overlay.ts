@@ -2,6 +2,7 @@ import {
   FIELD_NAME_CHOICES,
   type FieldRead,
   type FieldSamples,
+  type ListChoice,
   OVERLAY_ID,
   type RecorderConfig,
   type RecorderMode,
@@ -13,6 +14,9 @@ export interface OverlayHandlers {
   onStop(): void;
   onFieldNamed(pickId: number, name: string, read: FieldRead): void;
   onFieldCancelled(pickId: number): void;
+  onListChoice(choice: ListChoice): void;
+  onInfiniteScroll(): void;
+  onFinishScope(): void;
 }
 
 export interface Overlay {
@@ -20,17 +24,29 @@ export interface Overlay {
   host: HTMLElement;
   setStatus(status: RecorderStatus): void;
   prompt(pickId: number, samples: FieldSamples): void;
+  /** Asks the user to confirm a detected list, or to widen or narrow it. */
+  promptList(count: number, canWiden: boolean, canNarrow: boolean): void;
+  /** Outlines several elements at once: the items of a list. */
+  highlightAll(rects: readonly DOMRect[], style?: "solid" | "dashed"): void;
   toast(text: string, level: "info" | "warn"): void;
   /** Outlines the element under the pointer while marking fields; null hides it. */
   highlight(rect: DOMRect | null, label?: string): void;
 }
+
+const MODE_LABELS: Record<RecorderMode, string> = {
+  record: "Recording",
+  markField: "Click the data to extract",
+  markList: "Click one job in the list",
+  openDetail: "Click a job's link to open it",
+  markNext: "Click the next-page button",
+};
 
 const CSS_TEXT = `
 :host { all: initial; }
 * { box-sizing: border-box; font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
 .bar, .dialog, .toast { position: fixed; z-index: 2147483647; color: #f4f4f5; background: #18181b;
   border: 1px solid #3f3f46; border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
-.bar { left: 50%; transform: translateX(-50%); top: 10px; display: flex; align-items: center; gap: 8px; padding: 6px 8px; white-space: nowrap; }
+.bar { left: 50%; transform: translateX(-50%); top: 10px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; padding: 6px 8px; white-space: nowrap; max-width: calc(100vw - 24px); }
 .bar.bottom { top: auto; bottom: 10px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; }
 .bar.marking .dot { background: #3b82f6; }
@@ -39,6 +55,7 @@ button { cursor: pointer; color: inherit; background: #27272a; border: 1px solid
 button:hover { background: #3f3f46; }
 button[aria-pressed="true"] { background: #2563eb; border-color: #2563eb; }
 button.stop { background: #b91c1c; border-color: #b91c1c; }
+button:disabled { opacity: .4; cursor: default; }
 .dialog { left: 50%; top: 64px; transform: translateX(-50%); width: 340px; padding: 12px; display: none; }
 .dialog.open { display: grid; gap: 8px; }
 .dialog h2 { margin: 0; font-size: 14px; font-weight: 600; }
@@ -51,6 +68,9 @@ select, input { color: #f4f4f5; background: #09090b; border: 1px solid #52525b; 
 .toast.open { display: block; }
 .toast.warn { border-color: #f59e0b; }
 .box { position: fixed; z-index: 2147483646; pointer-events: none; display: none; border: 2px solid #3b82f6; background: rgba(59,130,246,.15); border-radius: 2px; }
+.box.item { border-color: #f59e0b; background: rgba(245,158,11,.12); }
+.box.item.dashed { border-style: dashed; background: transparent; }
+[hidden] { display: none !important; }
 .box span { position: absolute; left: -2px; top: -20px; background: #3b82f6; color: #fff; padding: 0 5px; border-radius: 3px 3px 0 0; font-size: 11px; }
 `;
 
@@ -113,26 +133,53 @@ export function createOverlay(
     boxLabel.textContent = label;
   };
 
+  const itemBoxes: HTMLElement[] = [];
+  const highlightAll: Overlay["highlightAll"] = (rects, style = "solid") => {
+    if (rects.length > 0) mount();
+    while (itemBoxes.length < rects.length) {
+      const itemBox = el("div", { class: "box item" });
+      itemBoxes.push(itemBox);
+      shadow.append(itemBox);
+    }
+    for (const [index, itemBox] of itemBoxes.entries()) {
+      const rect = rects[index];
+      itemBox.style.display = rect ? "block" : "none";
+      if (!rect) continue;
+      itemBox.classList.toggle("dashed", style === "dashed");
+      itemBox.style.left = `${rect.left}px`;
+      itemBox.style.top = `${rect.top}px`;
+      itemBox.style.width = `${rect.width}px`;
+      itemBox.style.height = `${rect.height}px`;
+    }
+  };
+
   if (!toolbar) {
-    return { host, highlight, setStatus() {}, prompt() {}, toast() {} };
+    return {
+      host,
+      highlight,
+      highlightAll,
+      setStatus() {},
+      prompt() {},
+      promptList() {},
+      toast() {},
+    };
   }
 
   const label = el("strong", { text: "Recording" });
   const status = el("span", { class: "status", text: "0 steps" });
-  const recordButton = el("button", { type: "button", "data-action": "record", text: "Record" });
-  const markButton = el("button", { type: "button", "data-action": "mark", text: "Mark field" });
-  const stopButton = el("button", {
-    type: "button",
-    "data-action": "stop",
-    class: "stop",
-    text: "Stop",
+  const button = (action: string, text: string, extra: Props = {}) =>
+    el("button", { type: "button", "data-action": action, text, ...extra });
+  const recordButton = button("record", "Record");
+  const markButton = button("mark", "Mark field");
+  const listButton = button("list", "Mark list");
+  const detailButton = button("detail", "Open detail");
+  const nextButton = button("next", "Next page");
+  const scrollButton = button("scroll", "Infinite scroll", {
+    title: "The list loads more jobs as you scroll",
   });
-  const moveButton = el("button", {
-    type: "button",
-    "data-action": "move",
-    title: "Move toolbar",
-    text: "⇅",
-  });
+  const finishButton = button("finish", "Finish");
+  const stopButton = button("stop", "Stop", { class: "stop" });
+  const moveButton = button("move", "⇅", { title: "Move toolbar" });
   const bar = el(
     "div",
     { class: "bar", role: "toolbar", "aria-label": "JobTrace recorder" },
@@ -141,9 +188,47 @@ export function createOverlay(
     status,
     recordButton,
     markButton,
+    listButton,
+    detailButton,
+    nextButton,
+    scrollButton,
+    finishButton,
     stopButton,
     moveButton,
   );
+
+  const listText = el("h2", { "data-role": "list-count" });
+  const narrowerButton = button("list-narrower", "Narrower");
+  const widerButton = button("list-wider", "Wider");
+  const listDialog = el(
+    "div",
+    { class: "dialog", role: "dialog", "aria-label": "Confirm list", "data-role": "list-dialog" },
+    listText,
+    el("div", {
+      text: "The highlighted elements will each become one job. Widen or narrow the selection if it is off.",
+    }),
+    el(
+      "div",
+      { class: "actions" },
+      narrowerButton,
+      widerButton,
+      button("list-cancel", "Cancel"),
+      button("list-use", "Use these"),
+    ),
+  );
+  let listPending = false;
+  const answerList = (choice: ListChoice) => {
+    if (choice === "use" || choice === "cancel") {
+      listPending = false;
+      listDialog.classList.remove("open");
+    }
+    handlers.onListChoice(choice);
+  };
+  for (const choice of ["narrower", "wider", "cancel", "use"] as const) {
+    listDialog
+      .querySelector(`[data-action="list-${choice}"]`)
+      ?.addEventListener("click", () => answerList(choice));
+  }
 
   const nameSelect = el("select", { "data-role": "name" });
   const customInput = el("input", {
@@ -168,7 +253,7 @@ export function createOverlay(
     el("div", { class: "actions" }, cancelButton, saveButton),
   );
   const toastBox = el("div", { class: "toast", role: "status" });
-  shadow.append(bar, dialog, toastBox);
+  shadow.append(bar, dialog, listDialog, toastBox);
 
   // Keep the overlay's own events away from the page's listeners.
   for (const type of [
@@ -237,11 +322,19 @@ export function createOverlay(
     if (pending) {
       if (event.key === "Enter") save();
       else if (event.key === "Escape") cancel();
+    } else if (listPending) {
+      if (event.key === "Enter") answerList("use");
+      else if (event.key === "Escape") answerList("cancel");
     } else if (event.key === "Escape") handlers.onMode("record");
   });
 
   recordButton.addEventListener("click", () => handlers.onMode("record"));
   markButton.addEventListener("click", () => handlers.onMode("markField"));
+  listButton.addEventListener("click", () => handlers.onMode("markList"));
+  detailButton.addEventListener("click", () => handlers.onMode("openDetail"));
+  nextButton.addEventListener("click", () => handlers.onMode("markNext"));
+  scrollButton.addEventListener("click", () => handlers.onInfiniteScroll());
+  finishButton.addEventListener("click", () => handlers.onFinishScope());
   stopButton.addEventListener("click", () => handlers.onStop());
   moveButton.addEventListener("click", () => bar.classList.toggle("bottom"));
 
@@ -250,15 +343,45 @@ export function createOverlay(
   return {
     host,
     highlight,
-    setStatus({ mode, steps, fields }) {
+    setStatus({ mode, steps, fields, scope, list, hasList }) {
       usedFields = fields;
-      const marking = mode === "markField";
-      bar.classList.toggle("marking", marking);
-      label.textContent = marking ? "Click the data to extract" : "Recording";
-      status.textContent = `${plural(steps, "step")} · ${plural(fields.length, "field")}`;
-      recordButton.setAttribute("aria-pressed", String(!marking));
-      markButton.setAttribute("aria-pressed", String(marking));
-      if (!marking) highlight(null);
+      bar.classList.toggle("marking", mode !== "record");
+      label.textContent = MODE_LABELS[mode];
+      const where =
+        scope === "list"
+          ? ` · in list (${list?.count ?? 0} items)`
+          : scope === "detail"
+            ? " · on detail page"
+            : "";
+      status.textContent = `${plural(steps, "step")} · ${plural(fields.length, "field")}${where}`;
+      const pressed: Array<[HTMLElement, RecorderMode]> = [
+        [recordButton, "record"],
+        [markButton, "markField"],
+        [listButton, "markList"],
+        [detailButton, "openDetail"],
+        [nextButton, "markNext"],
+      ];
+      for (const [node, value] of pressed)
+        node.setAttribute("aria-pressed", String(mode === value));
+      // Only offer what makes sense where the user currently is.
+      listButton.hidden = scope !== "none";
+      detailButton.hidden = scope !== "list";
+      nextButton.hidden = scrollButton.hidden = scope === "detail" || !hasList;
+      finishButton.hidden = scope === "none";
+      finishButton.textContent = scope === "detail" ? "Back to list" : "Finish list";
+      if (mode !== "markList" && listPending) {
+        listPending = false;
+        listDialog.classList.remove("open");
+      }
+      if (mode === "record") highlight(null);
+    },
+    highlightAll,
+    promptList(count, canWiden, canNarrow) {
+      listPending = true;
+      listText.textContent = `Found ${count} similar items`;
+      widerButton.disabled = !canWiden;
+      narrowerButton.disabled = !canNarrow;
+      listDialog.classList.add("open");
     },
     prompt(pickId, samples) {
       if (pending) handlers.onFieldCancelled(pending.pickId);

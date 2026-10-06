@@ -27,7 +27,18 @@ export const FIELD_NAME_CHOICES = [
   "remote",
 ] as const;
 
-export type RecorderMode = "record" | "markField";
+/**
+ * What the next click means:
+ *  - record: a normal action on the page
+ *  - markField: pick a piece of data to extract
+ *  - markList: pick one item of a repeating list
+ *  - openDetail: follow an item's link to its detail page
+ *  - markNext: pick the next-page control
+ */
+export type RecorderMode = "record" | "markField" | "markList" | "openDetail" | "markNext";
+/** The innermost construct being recorded into. */
+export type ScopeKind = "none" | "list" | "detail";
+export type ListChoice = "use" | "wider" | "narrower" | "cancel";
 export type GeneratePurpose = "action" | "field";
 export type FieldRead = "text" | "innerHTML" | "href";
 
@@ -68,6 +79,8 @@ export type PageMessage =
       interactive?: boolean;
       /** Set on non-interactive clicks; a matching "effect" message follows. */
       effectId?: number;
+      /** Set when the target is relative to this item of the current list. */
+      item?: { index: number };
     }
   | { kind: "effect"; effectId: number; mutated: boolean }
   | {
@@ -77,7 +90,28 @@ export type PageMessage =
       target: WireTarget;
       link?: { ref: ElementRef; target: WireTarget };
       samples: FieldSamples;
+      /** Set when the targets are relative to this item of the current list. */
+      item?: { index: number };
     }
+  /** A list item was clicked in markList mode; the frame holds the candidate lists. */
+  | { kind: "listPick"; count: number; canWiden: boolean; canNarrow: boolean }
+  /** The user's answer in the list dialog (sent by the top frame). */
+  | { kind: "listChoice"; choice: ListChoice }
+  | { kind: "listConfirmed"; group: ElementRef; target: WireTarget; count: number }
+  | {
+      kind: "detailPick";
+      at: number;
+      url: string;
+      item: { index: number };
+      ref: ElementRef;
+      target: WireTarget;
+      /** The link's href attribute, when it is a link. */
+      href?: string;
+    }
+  | { kind: "nextPick"; ref: ElementRef; target: WireTarget }
+  | { kind: "setPagination"; mode: "infiniteScroll" }
+  | { kind: "finishScope" }
+  | { kind: "notice"; text: string; level: "info" | "warn" }
   | { kind: "fieldNamed"; pickId: number; name: string; read: FieldRead }
   | { kind: "fieldCancelled"; pickId: number }
   | { kind: "sensitive"; reason: string }
@@ -88,11 +122,19 @@ export interface RecorderStatus {
   mode: RecorderMode;
   steps: number;
   fields: string[];
+  scope: ScopeKind;
+  /** The list being recorded into, so every frame can find its items again. */
+  list?: { locators: Locator[]; count: number };
+  /** True once any list was marked; pagination needs one. */
+  hasList: boolean;
 }
 
 export type NodeMessage =
   | ({ kind: "status" } & RecorderStatus)
   | { kind: "prompt"; pickId: number; samples: FieldSamples }
+  | { kind: "promptList"; count: number; canWiden: boolean; canNarrow: boolean }
+  /** Relayed to the frame that holds the list candidates. */
+  | { kind: "listChoice"; choice: ListChoice }
   | { kind: "toast"; text: string; level: "info" | "warn" };
 
 export interface RecorderConfig {
@@ -108,6 +150,8 @@ export interface RecorderApi {
   flush(): void;
   /** True when `element` is the one registered under `key`. */
   isElement(key: string, element: Element): boolean;
+  /** True when `elements` are exactly the group registered under `key`. */
+  isGroup(key: string, elements: Element[]): boolean;
   generateTarget(element: Element, purpose: GeneratePurpose): WireTarget;
   /** A CSS selector for an element, used for iframe chains. */
   cssFor(element: Element): string | null;

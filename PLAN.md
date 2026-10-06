@@ -292,6 +292,16 @@ Locator ranking prefers stable signals: test ids, then ARIA role and name, then 
 - **Field targets** never use text or name-based locators, because the text is what changes between runs.
 - **Locator checking**: each generated locator is checked in the page, then again with the real Playwright engine while the element is still there. After a click that navigated away, the second check is not possible and the locators are kept as generated.
 
+### 6.2b Decisions made while building M3
+- **Scopes**: marking a list opens a list scope; following an item's link with Open detail opens a detail scope inside it. The toolbar's Finish button closes the innermost scope ("Back to list" also takes the browser back). One list with one level of detail at a time; nested lists are not supported yet.
+- **List detection**: for the clicked element and each ancestor, the similar siblings (same tag, shared stable classes) plus look-alikes under the same kind of parent elsewhere on the page, which covers boards grouped by department. The largest card-like group is proposed first; Narrower / Wider step through the alternatives.
+- **List locators rank class-based CSS above the bare ARIA role.** A list target is accepted on replay with any number of matches, so a too-broad locator would silently pick up wrong items.
+- **Item-relative locators** must also work in most other items of the list; candidates that only fit the clicked item are dropped when better ones exist.
+- **Detail strategy**: `newTab` whenever the link has a real http(s) address, because it leaves the list page untouched (which matters for infinite scroll); `sameTab` otherwise.
+- **Pagination** attaches to the current or most recent list, wherever in the session it is marked. Only the Next-button and infinite-scroll modes can be recorded; `urlPattern` remains hand-written.
+- **Actions outside the items while a list is open** are replayed once, before the list, instead of once per item.
+- The recorder overlay shows the same toolbar in every scope but hides controls that do not apply there.
+
 ### 6.3 Post-processing
 - Merge redundant steps (click-then-fill on the same input becomes a fill; consecutive scrolls are coalesced).
 - Drop no-op clicks (e.g. on non-interactive elements with no effect) when a later step clearly supersedes them.
@@ -489,6 +499,7 @@ Order rationale: the recording format and a replay engine come first, so the rec
   6. Login-gated board (fake login, cookie session)
   7. Job board embedded in an iframe
   8. Bot-wall page (fake challenge page and a 429 route)
+  10. List split into department groups (added in M3, for list detection)
   9. "v2" of site 4 with changed class names but same structure and text (locator-drift test)
 - `CLAUDE.md`, `README.md` skeleton, `LICENSE` (MIT), `CONTRIBUTING.md`, `SECURITY.md`.
 - **Accept**: `pnpm test` passes in CI; `pnpm test-sites` serves all fixtures.

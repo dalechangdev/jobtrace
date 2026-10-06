@@ -4,11 +4,10 @@ Record how you navigate a career website, then replay those steps to scrape its 
 listings: manually now, on a schedule later. Open source (MIT), run by developers from
 source.
 
-> **Status: early.** You can record basic actions and single fields with
-> `jobtrace record` and replay them with `jobtrace run` (milestones M0–M2 of
-> [PLAN.md](PLAN.md)). Recording lists of jobs, detail pages and pagination comes next;
-> until then those loops are written by hand (see `examples/recordings`). The database,
-> web UI, scheduler and ATS API sources are not built yet.
+> **Status: early.** You can record a job board (its list, detail pages and
+> pagination) with `jobtrace record` and replay it with `jobtrace run` (milestones
+> M0–M3 of [PLAN.md](PLAN.md)). Results are printed as JSON; the database, web UI,
+> scheduler and ATS API sources are not built yet.
 
 ## Quickstart
 
@@ -37,8 +36,22 @@ Opens a Chromium window on `<url>` with a small toolbar:
 - **Mark field**: the page stops reacting to clicks. Click a piece of data, pick what it
   is (`title`, `location`, a custom name, ...) and whether to read its text, its link
   URL or its HTML. Press Escape or **Record** to go back to browsing.
+- **Mark list**: click anywhere inside one job card or row. The recorder highlights
+  everything that looks like it and asks you to confirm; use **Narrower** / **Wider** if
+  it picked too little or too much. From then on, **Mark field** applies to every job:
+  click a piece of data inside any one of the highlighted items.
+- **Open detail** (inside a list): click a job's link. The browser follows it, and the
+  fields you mark there are read from every job's own page. **Back to list** returns.
+- **Next page**: click the board's "Next" control. It is not followed while recording;
+  on replay it is clicked until it disappears or is disabled.
+- **Infinite scroll**: for boards that load more jobs as you scroll.
+- **Finish list**: leave the list, for example to mark something elsewhere on the page.
 - **Stop**: finish and save. Closing the window or pressing Ctrl+C in the terminal does
   the same.
+
+A typical session: open the board, **Mark list**, mark `title` and `url` (choose "Link
+URL" for the latter), **Open detail**, mark `description`, **Back to list**, **Next
+page**, **Stop**.
 
 The recording is written to `--out`, or to `<name>.jobtrace.json` in the current
 directory, and its path is printed on stdout. An existing file is never overwritten
@@ -49,8 +62,10 @@ Things to know:
 - **Passwords are never recorded.** Text typed into password, payment-card and
   one-time-code fields is skipped, with a warning. Scraping behind a login will use auth
   profiles (not built yet).
-- Marked fields are one-off for now: marking the first job's title extracts the first
-  job's title. Repeating that for every job on the page is the next milestone.
+- A field marked outside a list is one-off: it is read once per page, not per job.
+- While a list is open, what you do outside its items (searching, filtering) is replayed
+  once, before the list.
+- One list per recording session works best; lists inside lists are not supported.
 - After an action that changes the URL, the recording waits for the new URL using a
   pattern such as `**/jobs/*`. If a site's URLs change shape, delete or edit that
   `waitFor` step.

@@ -11,7 +11,9 @@ const target = z.object({
   locators: z.array(locatorSchema).max(20),
   fingerprint: fingerprintSchema,
 });
-const mode = z.enum(["record", "markField"]);
+const mode = z.enum(["record", "markField", "markList", "openDetail", "markNext"]);
+const item = z.object({ index: z.number().int().nonnegative() });
+const level = z.enum(["info", "warn"]);
 
 export const pageMessageSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("hello") }),
@@ -26,6 +28,7 @@ export const pageMessageSchema = z.discriminatedUnion("kind", [
     key: z.string().max(32).optional(),
     interactive: z.boolean().optional(),
     effectId: z.number().int().optional(),
+    item: item.optional(),
   }),
   z.object({ kind: z.literal("effect"), effectId: z.number().int(), mutated: z.boolean() }),
   z.object({
@@ -35,7 +38,37 @@ export const pageMessageSchema = z.discriminatedUnion("kind", [
     target,
     link: z.object({ ref, target }).optional(),
     samples: z.object({ text: z.string(), html: z.string(), href: z.string().optional() }),
+    item: item.optional(),
   }),
+  z.object({
+    kind: z.literal("listPick"),
+    count: z.number().int().positive(),
+    canWiden: z.boolean(),
+    canNarrow: z.boolean(),
+  }),
+  z.object({
+    kind: z.literal("listChoice"),
+    choice: z.enum(["use", "wider", "narrower", "cancel"]),
+  }),
+  z.object({
+    kind: z.literal("listConfirmed"),
+    group: ref,
+    target,
+    count: z.number().int().positive(),
+  }),
+  z.object({
+    kind: z.literal("detailPick"),
+    at: z.number(),
+    url: z.string(),
+    item,
+    ref,
+    target,
+    href: z.string().optional(),
+  }),
+  z.object({ kind: z.literal("nextPick"), ref, target }),
+  z.object({ kind: z.literal("setPagination"), mode: z.literal("infiniteScroll") }),
+  z.object({ kind: z.literal("finishScope") }),
+  z.object({ kind: z.literal("notice"), text: z.string().max(500), level }),
   z.object({
     kind: z.literal("fieldNamed"),
     pickId: z.number().int(),

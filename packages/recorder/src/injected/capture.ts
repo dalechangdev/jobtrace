@@ -1,13 +1,38 @@
 import { isSensitive, isTextEntry } from "./dom.ts";
+import {
+  bestCandidate,
+  generateListTarget,
+  generateRelativeTarget,
+  listCandidates,
+  resolveItems,
+} from "./lists.ts";
 import { generateTarget } from "./locators.ts";
 import type { Overlay } from "./overlay.ts";
-import type { ElementRef, FieldSamples, PageMessage, RecorderMode } from "./protocol.ts";
+import type {
+  ElementRef,
+  FieldSamples,
+  GeneratePurpose,
+  ListChoice,
+  PageMessage,
+  RecorderStatus,
+  WireTarget,
+} from "./protocol.ts";
 
 export interface CaptureDeps {
   send(message: PageMessage): void;
   register(element: Element): ElementRef;
+  registerGroup(elements: readonly Element[]): ElementRef;
   overlay: Overlay;
-  getMode(): RecorderMode;
+  getStatus(): RecorderStatus;
+}
+
+export interface Capture {
+  /** Reports text that was typed but not yet sent. */
+  flush(): void;
+  /** Applies the user's answer from the list dialog to the pending candidates. */
+  chooseList(choice: ListChoice): void;
+  /** Redraws item outlines after the mode or scope changed. */
+  refresh(): void;
 }
 
 /** Elements a click is "really" aimed at, even when it lands on a child. */
@@ -16,6 +41,8 @@ const INTERACTIVE =
 const RECORDED_KEYS = new Set(["Enter", "Escape", "Tab"]);
 /** How long after a click on a non-interactive element to watch for any effect. */
 const EFFECT_WINDOW_MS = 400;
+/** Modes in which a click picks something and must not reach the page. */
+const PICKING = new Set(["markField", "markList", "markNext"]);
 
 function deepTarget(event: Event): Element | null {
   const first = event.composedPath()[0];
@@ -23,16 +50,27 @@ function deepTarget(event: Event): Element | null {
   return first instanceof Node ? first.parentElement : null;
 }
 
+interface Described {
+  ref: ElementRef;
+  target: WireTarget;
+  item?: { index: number };
+}
+
 /**
- * Listens for user actions (capture phase, trusted events only) and reports
- * them. In "markField" mode clicks never reach the page; they pick data instead.
- * Returns `flush`, which reports text that was typed but not yet sent.
+ * Listens for user actions (capture phase) and reports them. What a click
+ * means depends on the mode: an action to replay, or a pick of a field, a
+ * list, a detail link or the next-page control.
  */
-export function installCapture({ send, register, overlay, getMode }: CaptureDeps): {
-  flush(): void;
-} {
+export function installCapture({
+  send,
+  register,
+  registerGroup,
+  overlay,
+  getStatus,
+}: CaptureDeps): Capture {
   const fromOverlay = (event: Event) => event.composedPath().includes(overlay.host);
   const url = () => location.href;
+  const mode = () => getStatus().mode;
   let pendingFill: {
     element: Element;
     value: string;
@@ -42,7 +80,39 @@ export function installCapture({ send, register, overlay, getMode }: CaptureDeps
   let lastEnterAt = 0;
   let nextEffectId = 1;
   let nextPickId = 1;
+  let listChoice: { candidates: Element[][]; index: number } | null = null;
+  let warnedOutside = false;
   const warned = new WeakSet<Element>();
+
+  const notice = (text: string, level: "info" | "warn" = "warn") =>
+    send({ kind: "notice", text, level });
+
+  /** The current list's items in this frame; empty when no list is open (or it lives elsewhere). */
+  const listItems = (): Element[] => {
+    const status = getStatus();
+    return status.scope === "list" && status.list ? resolveItems(status.list.locators) : [];
+  };
+  const itemOf = (element: Element, items: readonly Element[]) => {
+    const index = items.findIndex((item) => item !== element && item.contains(element));
+    return index < 0 ? null : { item: items[index] as Element, index };
+  };
+
+  /**
+   * Locators for an element: relative to its list item while a list is being
+   * recorded, absolute otherwise.
+   */
+  function describe(element: Element, purpose: GeneratePurpose): Described {
+    const items = listItems();
+    const inside = itemOf(element, items);
+    if (inside) {
+      return {
+        ref: register(element),
+        target: generateRelativeTarget(element, inside.item, items, purpose),
+        item: { index: inside.index },
+      };
+    }
+    return { ref: register(element), target: generateTarget(element, purpose) };
+  }
 
   const flush = () => {
     if (!pendingFill) return;
@@ -61,10 +131,16 @@ export function installCapture({ send, register, overlay, getMode }: CaptureDeps
     });
   };
 
-  const describe = (element: Element) => ({
-    ref: register(element),
-    target: generateTarget(element, "action"),
-  });
+  /** Actions outside the items of an open list would otherwise be repeated for every item. */
+  const noteOutsideList = (described: Described) => {
+    if (described.item || warnedOutside || getStatus().scope !== "list" || listItems().length === 0)
+      return;
+    warnedOutside = true;
+    notice(
+      "Actions outside the list's items are replayed once, before the list. Use Finish list when you are done with it.",
+      "info",
+    );
+  };
 
   function onClick(event: MouseEvent) {
     const raw = deepTarget(event);
@@ -81,20 +157,21 @@ export function installCapture({ send, register, overlay, getMode }: CaptureDeps
     if (lastLabel && lastLabel.control === element && Date.now() - lastLabel.at < 200) return;
     lastLabel =
       element instanceof HTMLLabelElement ? { control: element.control, at: Date.now() } : null;
-
     // Enter in a form field makes the browser click the form's submit button
     // itself. The key press is what the user did; replaying both would submit twice.
     const submitButton = element.matches('button, input[type="submit"], input[type="image"]');
     if (event.detail === 0 && submitButton && Date.now() - lastEnterAt < 500) return;
 
     const interactive = closest !== null;
+    const described = describe(element, "action");
+    noteOutsideList(described);
     const message: PageMessage = {
       kind: "action",
       action: "click",
       at: Date.now(),
       url: url(),
       interactive,
-      ...describe(element),
+      ...described,
     };
     if (interactive) return send(message);
 
@@ -129,16 +206,12 @@ export function installCapture({ send, register, overlay, getMode }: CaptureDeps
         : (element as HTMLElement).innerText;
     if (pendingFill) pendingFill.value = value;
     else {
+      const described = describe(element, "action");
+      noteOutsideList(described);
       pendingFill = {
         element,
         value,
-        message: {
-          kind: "action",
-          action: "fill",
-          at: Date.now(),
-          url: url(),
-          ...describe(element),
-        },
+        message: { kind: "action", action: "fill", at: Date.now(), url: url(), ...described },
       };
     }
   }
@@ -153,7 +226,7 @@ export function installCapture({ send, register, overlay, getMode }: CaptureDeps
       at: Date.now(),
       url: url(),
       value: element.value,
-      ...describe(element),
+      ...describe(element, "action"),
     });
   }
 
@@ -179,7 +252,9 @@ export function installCapture({ send, register, overlay, getMode }: CaptureDeps
     if (event.key === "Enter" && typing) lastEnterAt = Date.now();
     flush();
     const focused =
-      element && (typing || element instanceof HTMLSelectElement) ? describe(element) : {};
+      element && (typing || element instanceof HTMLSelectElement)
+        ? describe(element, "action")
+        : {};
     send({
       kind: "action",
       action: "press",
@@ -190,21 +265,110 @@ export function installCapture({ send, register, overlay, getMode }: CaptureDeps
     });
   }
 
-  function pick(element: Element) {
+  function pickField(element: Element) {
+    const status = getStatus();
+    const items = listItems();
+    const inside = itemOf(element, items);
+    if (status.scope === "list" && !inside) {
+      return notice(
+        "Click a piece of data inside one of the list's items. To mark something else, press Finish list first.",
+      );
+    }
     const link = element.closest("a[href]");
+    const linkInScope =
+      link && (!inside || (link !== inside.item && inside.item.contains(link))) ? link : null;
     const samples: FieldSamples = {
       text: element instanceof HTMLElement ? element.innerText : (element.textContent ?? ""),
       html: element.innerHTML,
-      ...(link ? { href: link.getAttribute("href") ?? "" } : {}),
+      ...(linkInScope ? { href: linkInScope.getAttribute("href") ?? "" } : {}),
     };
+    const target = (node: Element) =>
+      inside
+        ? generateRelativeTarget(node, inside.item, items, "field")
+        : generateTarget(node, "field");
     send({
       kind: "pick",
       pickId: nextPickId++,
       ref: register(element),
-      target: generateTarget(element, "field"),
-      ...(link ? { link: { ref: register(link), target: generateTarget(link, "field") } } : {}),
+      target: target(element),
+      ...(linkInScope ? { link: { ref: register(linkInScope), target: target(linkInScope) } } : {}),
       samples,
+      ...(inside ? { item: { index: inside.index } } : {}),
     });
+  }
+
+  const showCandidates = () => {
+    if (!listChoice) return;
+    const group = listChoice.candidates[listChoice.index] as Element[];
+    overlay.highlightAll(group.map((item) => item.getBoundingClientRect()));
+    send({
+      kind: "listPick",
+      count: group.length,
+      canNarrow: listChoice.index > 0,
+      canWiden: listChoice.index < listChoice.candidates.length - 1,
+    });
+  };
+
+  function pickList(element: Element) {
+    const candidates = listCandidates(element);
+    if (candidates.length === 0) {
+      return notice(
+        "Nothing similar was found next to that element. Click one whole job card or row.",
+      );
+    }
+    listChoice = { candidates, index: bestCandidate(candidates) };
+    showCandidates();
+  }
+
+  function chooseList(choice: ListChoice) {
+    if (!listChoice) return;
+    if (choice === "wider" || choice === "narrower") {
+      const next = listChoice.index + (choice === "wider" ? 1 : -1);
+      if (listChoice.candidates[next]) listChoice.index = next;
+      return showCandidates();
+    }
+    const group = listChoice.candidates[listChoice.index] as Element[];
+    listChoice = null;
+    overlay.highlightAll([]);
+    if (choice === "use") {
+      send({
+        kind: "listConfirmed",
+        group: registerGroup(group),
+        target: generateListTarget(group),
+        count: group.length,
+      });
+    }
+  }
+
+  /** In openDetail mode the click is both recorded as the detail link and allowed to happen. */
+  function pickDetail(event: Event, raw: Element) {
+    const items = listItems();
+    const inside = itemOf(raw, items);
+    if (!inside) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return notice("Click a link inside one of the list's items.");
+    }
+    const link = raw.closest("a[href]");
+    const withinItem = (node: Element | null) =>
+      node && node !== inside.item && inside.item.contains(node) ? node : null;
+    const element = withinItem(link) ?? withinItem(raw.closest(INTERACTIVE)) ?? raw;
+    const href = element.getAttribute("href");
+    send({
+      kind: "detailPick",
+      at: Date.now(),
+      url: url(),
+      item: { index: inside.index },
+      ref: register(element),
+      // The link's text is the job title, which differs per item: field-style locators only.
+      target: generateRelativeTarget(element, inside.item, items, "field"),
+      ...(href ? { href } : {}),
+    });
+  }
+
+  function pickNext(raw: Element) {
+    const element = raw.closest(INTERACTIVE) ?? raw;
+    send({ kind: "nextPick", ref: register(element), target: generateTarget(element, "action") });
   }
 
   /**
@@ -226,7 +390,7 @@ export function installCapture({ send, register, overlay, getMode }: CaptureDeps
       true,
     );
 
-  // While marking fields, the page must not react to the pointer at all.
+  // While picking, the page must not react to the pointer at all.
   for (const type of [
     "pointerdown",
     "mousedown",
@@ -239,16 +403,23 @@ export function installCapture({ send, register, overlay, getMode }: CaptureDeps
     "submit",
   ] as const) {
     listen(type, (event) => {
-      if (getMode() !== "markField") return;
+      const current = mode();
+      const element = deepTarget(event);
+      if (current === "openDetail") {
+        if (type === "click" && element) pickDetail(event, element);
+        return;
+      }
+      if (!PICKING.has(current)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (type !== "click") return;
-      const element = deepTarget(event);
-      if (element && !isSensitive(element)) pick(element);
+      if (type !== "click" || !element || isSensitive(element)) return;
+      if (current === "markField") pickField(element);
+      else if (current === "markList") pickList(element);
+      else pickNext(element);
     });
   }
   listen("mousemove", (event) => {
-    if (getMode() !== "markField") return;
+    if (mode() === "record" || listChoice) return;
     const element = deepTarget(event);
     overlay.highlight(element?.getBoundingClientRect() ?? null, element?.localName);
   });
@@ -257,13 +428,13 @@ export function installCapture({ send, register, overlay, getMode }: CaptureDeps
   const whenRecording =
     <E extends Event>(handler: (event: E) => void) =>
     (event: E) => {
-      if (getMode() === "record") handler(event);
+      if (mode() === "record") handler(event);
     };
   listen("click", whenRecording(onClick));
   listen("input", whenRecording(onInput));
   listen("change", whenRecording(onChange));
   listen("keydown", (event) => {
-    if (getMode() === "markField") {
+    if (mode() !== "record") {
       if (event.key === "Escape") send({ kind: "setMode", mode: "record" });
       return;
     }
@@ -273,5 +444,32 @@ export function installCapture({ send, register, overlay, getMode }: CaptureDeps
   listen("submit", flush);
   window.addEventListener("pagehide", flush);
 
-  return { flush };
+  // While a list is open, keep its items outlined so it is clear what "inside an item" means.
+  const refresh = () => {
+    if (listChoice) {
+      if (mode() !== "markList") {
+        listChoice = null;
+        overlay.highlightAll([]);
+      }
+      return;
+    }
+    const outlined = mode() === "markField" || mode() === "openDetail" ? listItems() : [];
+    overlay.highlightAll(
+      outlined.map((item) => item.getBoundingClientRect()),
+      "dashed",
+    );
+  };
+  const redraw = () => {
+    if (listChoice) {
+      const group = listChoice.candidates[listChoice.index] as Element[];
+      overlay.highlightAll(group.map((item) => item.getBoundingClientRect()));
+    } else refresh();
+  };
+  window.addEventListener("scroll", redraw, true);
+  window.addEventListener("resize", redraw);
+  setInterval(() => {
+    if (listChoice || getStatus().scope === "list") redraw();
+  }, 400);
+
+  return { flush, chooseList, refresh };
 }

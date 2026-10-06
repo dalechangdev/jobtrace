@@ -4,6 +4,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import {
   COMPANY,
   type FixtureJob,
+  GROUPED_DEPARTMENTS,
   INFINITE_BATCH_SIZE,
   jobsFor,
   PAGINATED_PAGE_SIZE,
@@ -31,6 +32,7 @@ export const SITES = {
   botWall: "/botwall/",
   detailV2: "/detail-v2/",
   robotsDisallowed: "/disallowed/",
+  grouped: "/grouped/",
 } as const;
 
 export const LOGIN_CREDENTIALS = { username: "demo", password: "correct-horse-battery" } as const;
@@ -312,6 +314,20 @@ ${jobList(jobsFor("login"))}`,
   app.get(`${SITES.botWall}forbidden`, (_request, reply) =>
     reply.code(403).type("text/plain").send("Forbidden"),
   );
+
+  // 10. One list split into groups per department, as many job boards do.
+  app.get(SITES.grouped, (_request, reply) => {
+    const sections = GROUPED_DEPARTMENTS.map(
+      ({ name, jobs }) =>
+        `<section class="dept"><h2>${name}</h2>${jobList(jobs, {
+          href: (job) => `${SITES.detail}jobs/${job.id}`,
+        })}</section>`,
+    ).join("\n");
+    return html(
+      reply,
+      page({ title: `Jobs at ${COMPANY}`, body: `<h1>Open positions</h1>${sections}` }),
+    );
+  });
 
   // Disallowed by /robots.txt, for the robots_disallowed fixture.
   app.get(SITES.robotsDisallowed, (_request, reply) =>

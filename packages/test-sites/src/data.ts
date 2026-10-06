@@ -91,6 +91,13 @@ export const INFINITE_BATCH_SIZE = 6;
 /** Artificial latency of the SPA's JSON API, to exercise delayed rendering. */
 export const SPA_API_DELAY_MS = 300;
 
+/** Site 10 shows nine jobs split into three department sections. */
+export const GROUPED_DEPARTMENTS: ReadonlyArray<{ name: string; jobs: readonly FixtureJob[] }> = [
+  { name: "Engineering", jobs: ALL_JOBS.slice(0, 4) },
+  { name: "Design", jobs: ALL_JOBS.slice(4, 7) },
+  { name: "Operations", jobs: ALL_JOBS.slice(7, 9) },
+];
+
 export function jobsFor(site: keyof typeof SITE_JOB_COUNTS): FixtureJob[] {
   return ALL_JOBS.slice(0, SITE_JOB_COUNTS[site]);
 }

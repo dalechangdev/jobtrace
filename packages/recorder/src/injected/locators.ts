@@ -100,7 +100,7 @@ function textLocator(element: Element): Locator | null {
 }
 
 /** Tag plus stable classes, e.g. `a.title`; an id anchors the selector on its own. */
-function compound(element: Element): { selector: string; anchored: boolean } {
+export function compound(element: Element): { selector: string; anchored: boolean } {
   const id = stableId(element);
   if (id) return { selector: `#${CSS.escape(id)}`, anchored: true };
   const classes = stableClasses(element).slice(0, 2);
@@ -110,7 +110,7 @@ function compound(element: Element): { selector: string; anchored: boolean } {
   };
 }
 
-function nthOfType(element: Element): number {
+export function nthOfType(element: Element): number {
   let index = 1;
   for (
     let sibling = element.previousElementSibling;
@@ -154,7 +154,7 @@ export function cssFor(element: Element): string | null {
 }
 
 /** Structural XPath from the nearest stable id, or from the document root. */
-function xpathFor(element: Element): string | null {
+export function xpathFor(element: Element): string | null {
   if (inShadowRoot(element)) return null;
   const parts: string[] = [];
   for (let node: Element | null = element; node; node = node.parentElement) {
@@ -172,7 +172,7 @@ function xpathFor(element: Element): string | null {
   return `/${parts.join("/")}`;
 }
 
-function fingerprintOf(element: Element): Fingerprint {
+export function fingerprintOf(element: Element): Fingerprint {
   const attrs: Record<string, string> = {};
   for (const name of [
     "class",

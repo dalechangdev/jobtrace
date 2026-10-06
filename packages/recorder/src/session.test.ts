@@ -1,5 +1,4 @@
-import type { Recording, Step } from "@jobtrace/core";
-import { runRecording } from "@jobtrace/runner";
+import type { Recording } from "@jobtrace/core";
 import {
   jobsFor,
   LOGIN_CREDENTIALS,
@@ -7,15 +6,11 @@ import {
   SITES,
   startTestSites,
 } from "@jobtrace/test-sites";
-import { type Browser, chromium, type Page } from "playwright";
+import { type Browser, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { OVERLAY_ID } from "./injected/protocol.ts";
-import {
-  type RecorderEvent,
-  type RecorderOptions,
-  type RecordingSession,
-  startRecording,
-} from "./session.ts";
+import { type RecorderEvent, type RecorderOptions, startRecording } from "./session.ts";
+import { mark, overlay, replay as replayWith, setMode, stepOf, types } from "./testing.ts";
 
 let sites: RunningTestSites;
 let browser: Browser;
@@ -33,45 +28,7 @@ afterAll(async () => {
 const record = (path: string, extra: Partial<RecorderOptions> = {}) =>
   startRecording({ url: sites.url(path), browser, headless: true, openShadow: true, ...extra });
 
-const overlay = (page: Page) => page.locator(`#${OVERLAY_ID}`);
-const types = (recording: Recording) => recording.steps.map((step) => step.type);
-const stepOf = <T extends Step["type"]>(recording: Recording, type: T) =>
-  recording.steps.find((step): step is Extract<Step, { type: T }> => step.type === type);
-
-async function setMode(session: RecordingSession, mode: "mark" | "record") {
-  await overlay(session.page).locator(`[data-action="${mode}"]`).click();
-  await expect.poll(() => session.status().mode).toBe(mode === "mark" ? "markField" : "record");
-}
-
-/** Marks an element as a field through the overlay, like a user would. */
-async function mark(
-  session: RecordingSession,
-  click: () => Promise<void>,
-  name: string,
-  read?: "text" | "href" | "innerHTML",
-) {
-  const ui = overlay(session.page);
-  await click();
-  await ui.locator(".dialog.open").waitFor();
-  const choice = ui.locator('[data-role="name"]');
-  if ((await choice.locator(`option[value="${name}"]`).count()) > 0)
-    await choice.selectOption(name);
-  else {
-    await choice.selectOption("__custom");
-    await ui.locator('[data-role="custom"]').fill(name);
-  }
-  if (read) await ui.locator('[data-role="read"]').selectOption(read);
-  await ui.locator('[data-action="save"]').click();
-  await expect.poll(() => session.status().fields).toContain(name);
-}
-
-/** Replays a recording without politeness delays. */
-const replay = (recording: Recording) =>
-  runRecording(recording, {
-    browser,
-    settings: { minDelayMs: 0, maxDelayMs: 0, stepTimeoutMs: 5000 },
-    tuning: { pollIntervalMs: 25, fallbackGraceMs: 300 },
-  });
+const replay = (recording: Recording) => replayWith(recording, browser);
 
 const collapse = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ").trim();
 
@@ -98,10 +55,10 @@ describe("record, then replay", () => {
     expect(types(recording)).toEqual(["navigate", "fill", "select", "press", "waitFor", "extract"]);
     expect(recording.startUrl).toBe(sites.url(SITES.staticList));
     expect(recording.name).toBe("Jobs at Acme Robotics");
-    expect(stepOf(recording, "fill")?.value).toBe("engineer");
-    expect(stepOf(recording, "select")?.value).toBe("Full-time");
-    expect(stepOf(recording, "waitFor")?.urlPattern).toBe(`**${SITES.staticList}?*`);
-    expect(stepOf(recording, "extract")?.fields.map((field) => field.name)).toEqual([
+    expect(stepOf(recording.steps, "fill")?.value).toBe("engineer");
+    expect(stepOf(recording.steps, "select")?.value).toBe("Full-time");
+    expect(stepOf(recording.steps, "waitFor")?.urlPattern).toBe(`**${SITES.staticList}?*`);
+    expect(stepOf(recording.steps, "extract")?.fields.map((field) => field.name)).toEqual([
       "title",
       "location",
       "salaryText",
@@ -143,8 +100,8 @@ describe("record, then replay", () => {
     const { recording, samples } = await session.stop();
 
     expect(types(recording)).toEqual(["navigate", "click", "waitFor", "extract"]);
-    expect(stepOf(recording, "waitFor")?.urlPattern).toBe(`**${SITES.spa}jobs/*`);
-    expect(stepOf(recording, "click")?.target.locators[0]).toEqual({
+    expect(stepOf(recording.steps, "waitFor")?.urlPattern).toBe(`**${SITES.spa}jobs/*`);
+    expect(stepOf(recording.steps, "click")?.target.locators[0]).toEqual({
       kind: "role",
       role: "link",
       name: job?.title,
@@ -175,7 +132,7 @@ describe("record, then replay", () => {
     await mark(session, () => board.locator("li.job a.title").nth(2).click(), "url", "href");
     const { recording, samples } = await session.stop();
 
-    const fields = stepOf(recording, "extract")?.fields ?? [];
+    const fields = stepOf(recording.steps, "extract")?.fields ?? [];
     expect(fields.map((field) => field.target.frame)).toEqual([["#job-board"], ["#job-board"]]);
     expect(fields[1]).toMatchObject({
       name: "url",
@@ -324,7 +281,7 @@ describe("capture details", () => {
     );
     const { recording, samples } = await session.stop();
     expect(samples.location).toBe(jobsFor("detail")[0]?.employmentType);
-    expect(stepOf(recording, "extract")?.fields).toHaveLength(1);
+    expect(stepOf(recording.steps, "extract")?.fields).toHaveLength(1);
   });
 
   it("hides the overlay internals from page scripts by default", async () => {

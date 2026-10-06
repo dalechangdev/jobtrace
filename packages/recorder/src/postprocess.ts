@@ -1,4 +1,4 @@
-import type { Field, Step } from "@jobtrace/core";
+import { type Field, type Step, type StepOf, type Target, walkSteps } from "@jobtrace/core";
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 /** A step before ids are assigned. */
@@ -25,7 +25,15 @@ export type RawItem =
       /** Arrival order among navigation events, which can share a millisecond. */
       seq?: number;
     }
-  | { kind: "field"; field: Field; at: number };
+  | { kind: "field"; field: Field; at: number }
+  /** A list was marked: what follows is recorded per item, until the scope ends. */
+  | { kind: "listStart"; items: Target; at: number }
+  /** An item's link was followed: what follows happens on its detail page. */
+  | { kind: "detailStart"; link: Target; strategy: "sameTab" | "newTab"; at: number }
+  /** Finish list / Back to list: closes the innermost open scope. */
+  | { kind: "scopeEnd"; at: number }
+  /** Pagination for the current (or most recent) list. */
+  | { kind: "paginate"; mode: "nextButton" | "infiniteScroll"; next?: Target; at: number };
 
 /** A navigation the page itself started (link, form, script, history API). */
 export interface PageNavigation {
@@ -109,6 +117,8 @@ const isAction = (item: RawItem | undefined): item is StepItem =>
  *  - a click that opened a new tab is replaced by a navigation to that tab's URL
  *  - after an action that changed the URL, a waitFor on the new URL is inserted
  *  - consecutive marked fields are grouped into one extract step
+ *  - list, detail and pagination markers become forEach / openDetail / paginate
+ *    trees; actions made outside the items while a list is open run before it
  */
 export function postProcess(
   raw: readonly RawItem[],
@@ -124,6 +134,11 @@ export function postProcess(
   for (const navigation of navigations) {
     let cause: StepItem | undefined;
     for (const item of items) {
+      if (item.kind !== "step" && item.kind !== "field") {
+        // Opening a detail page or going back to the list navigates by itself.
+        if (item.at <= navigation.at + CLOCK_SLACK_MS) cause = undefined;
+        continue;
+      }
       if (!isStep(item)) continue;
       if (item.step.type === "navigate") {
         const earlier =
@@ -214,30 +229,106 @@ export function postProcess(
   const typedValues = kept.flatMap((item) =>
     isStep(item) && item.step.type === "fill" ? [item.step.value] : [],
   );
-  const steps: Step[] = [];
-  const nextId = () => `s${steps.length + 1}`;
-  let openExtract: Extract<Step, { type: "extract" }> | undefined;
+
+  // Assemble the tree. Ids are assigned at the end, in reading order.
+  interface Scope {
+    kind: "root" | "list" | "detail";
+    body: Step[];
+    /** The forEach or openDetail step this scope fills, and the body containing it. */
+    owner?: Step;
+    parentBody?: Step[];
+  }
+  const root: Step[] = [];
+  const stack: Scope[] = [{ kind: "root", body: root }];
+  const wrappers = new Map<Step, StepOf<"paginate">>();
+  let lastList: { loop: StepOf<"forEach">; parentBody: Step[] } | undefined;
+  let openExtract: { step: StepOf<"extract">; body: Step[] } | undefined;
+  const isItemRelative = (step: StepDraft) =>
+    "target" in step && step.target?.relativeTo === "item";
+
   for (const item of kept) {
-    if (!isStep(item)) {
-      if (!openExtract) {
-        openExtract = { id: nextId(), type: "extract", scope: "page", fields: [] };
-        steps.push(openExtract);
+    const scope = stack.at(-1) as Scope;
+    if (item.kind === "field") {
+      if (openExtract?.body !== scope.body) {
+        const step: StepOf<"extract"> = {
+          id: "",
+          type: "extract",
+          scope: scope.kind === "list" ? "item" : "page",
+          fields: [],
+        };
+        scope.body.push(step);
+        openExtract = { step, body: scope.body };
       }
-      const existing = openExtract.fields.findIndex((field) => field.name === item.field.name);
-      if (existing >= 0) openExtract.fields[existing] = item.field;
-      else openExtract.fields.push(item.field);
+      const { fields } = openExtract.step;
+      const existing = fields.findIndex((field) => field.name === item.field.name);
+      if (existing >= 0) fields[existing] = item.field;
+      else fields.push(item.field);
       continue;
     }
     openExtract = undefined;
-    steps.push({ id: nextId(), ...item.step } as Step);
+    if (item.kind === "listStart") {
+      const loop: StepOf<"forEach"> = { id: "", type: "forEach", items: item.items, body: [] };
+      scope.body.push(loop);
+      stack.push({ kind: "list", body: loop.body, owner: loop, parentBody: scope.body });
+      lastList = { loop, parentBody: scope.body };
+      continue;
+    }
+    if (item.kind === "detailStart") {
+      if (scope.kind !== "list") continue;
+      const detail: StepOf<"openDetail"> = {
+        id: "",
+        type: "openDetail",
+        link: item.link,
+        strategy: item.strategy,
+        body: [],
+      };
+      scope.body.push(detail);
+      stack.push({ kind: "detail", body: detail.body, owner: detail, parentBody: scope.body });
+      continue;
+    }
+    if (item.kind === "scopeEnd") {
+      if (stack.length > 1) stack.pop();
+      continue;
+    }
+    if (item.kind === "paginate") {
+      if (!lastList) continue;
+      const { loop, parentBody } = lastList;
+      const next = item.mode === "nextButton" && item.next ? { next: item.next } : {};
+      const until = item.mode === "nextButton" ? "nextMissingOrDisabled" : "noNewItems";
+      const existing = wrappers.get(loop);
+      const wrapper: StepOf<"paginate"> = {
+        id: "",
+        type: "paginate",
+        mode: item.mode,
+        ...next,
+        until,
+        body: [loop],
+      };
+      parentBody[parentBody.indexOf(existing ?? loop)] = wrapper;
+      wrappers.set(loop, wrapper);
+      continue;
+    }
+
+    const step = { id: "", ...item.step } as Step;
+    if (scope.kind === "list" && scope.owner && scope.parentBody && !isItemRelative(item.step)) {
+      // Done once for the whole page, not once per item: runs before the list.
+      const anchor = wrappers.get(scope.owner) ?? scope.owner;
+      scope.parentBody.splice(scope.parentBody.indexOf(anchor), 0, step);
+    } else scope.body.push(step);
+
     const destination = navigatedTo.get(item);
-    if (destination) {
+    if (destination && !isItemRelative(item.step)) {
       const urlPattern = urlWaitPattern(destination, typedValues);
       // A pattern the previous URL already satisfies would not wait for anything.
       if (urlPattern && !(item.urlBefore && globMatches(urlPattern, item.urlBefore))) {
-        steps.push({ id: nextId(), type: "waitFor", urlPattern });
+        const wait: Step = { id: "", type: "waitFor", urlPattern };
+        const body = scope.kind === "list" && scope.parentBody ? scope.parentBody : scope.body;
+        body.splice(body.indexOf(step) + 1, 0, wait);
       }
     }
   }
-  return steps;
+
+  let counter = 0;
+  for (const step of walkSteps(root)) step.id = `s${++counter}`;
+  return root;
 }

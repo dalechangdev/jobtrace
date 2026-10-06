@@ -10,8 +10,8 @@ silently diverging. Record agreed changes in `PLAN.md` itself.
 - [x] M0 — Scaffold and mock sites
 - [x] M1 — Recording format and replay engine
 - [x] M2 — Recorder: basic actions
-- [ ] M3 — Recorder: lists, detail pages, pagination  ← next
-- [ ] M4 — Persistence
+- [x] M3 — Recorder: lists, detail pages, pagination
+- [ ] M4 — Persistence  ← next
 - [ ] M4b — ATS API sources (Greenhouse, Lever, Ashby)
 - [ ] M5 — Auth profiles and politeness
 - [ ] M6 — API and worker
@@ -73,6 +73,9 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`, `pnpm db:migr
   the page). No `innerHTML` or inline styles there either; strict-CSP sites reject them.
 - Messages from recorded pages are untrusted input; they are validated in
   `recorder/src/messages.ts` before use.
+- The recorder keeps its state in Node (`session.ts`): mode, open scopes, captured
+  items. Pages are stateless and ask for the status on every load, so anything a page
+  needs after a reload (such as the open list's locators) must travel in the status.
 - Recorder tests run headless with `openShadow: true` so they can click the overlay's
   buttons; drive the page with real input (`click`, `pressSequentially`), since scripted
   clicks and key presses are ignored on purpose.

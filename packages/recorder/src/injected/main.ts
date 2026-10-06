@@ -9,7 +9,6 @@ import {
   type PageMessage,
   type RecorderApi,
   type RecorderConfig,
-  type RecorderMode,
   type RecorderStatus,
 } from "./protocol.ts";
 
@@ -41,12 +40,27 @@ function init(win: RecorderWindow) {
     return { nonce, key };
   };
 
+  const groups = new Map<string, readonly Element[]>();
+  const registerGroup = (members: readonly Element[]): ElementRef => {
+    const key = `g${nextKey++}`;
+    groups.set(key, [...members]);
+    return { nonce, key };
+  };
+
   const api: RecorderApi = {
     nonce,
     register,
     generateTarget,
     cssFor,
     isElement: (key, element) => elements.get(key)?.deref() === element,
+    isGroup: (key, candidates) => {
+      const members = groups.get(key);
+      return (
+        members !== undefined &&
+        members.length === candidates.length &&
+        candidates.every((c) => members.includes(c))
+      );
+    },
     receive() {},
     flush() {},
   };
@@ -58,7 +72,13 @@ function init(win: RecorderWindow) {
     void bridge(message).catch(() => {});
   };
 
-  let mode: RecorderMode = "record";
+  let current: RecorderStatus = {
+    mode: "record",
+    steps: 0,
+    fields: [],
+    scope: "none",
+    hasList: false,
+  };
   const isTop = win.top === win;
   const overlay = createOverlay(
     win[CONFIG_NAME] ?? {},
@@ -67,20 +87,33 @@ function init(win: RecorderWindow) {
       onStop: () => send({ kind: "stop" }),
       onFieldNamed: (pickId, name, read) => send({ kind: "fieldNamed", pickId, name, read }),
       onFieldCancelled: (pickId) => send({ kind: "fieldCancelled", pickId }),
+      onListChoice: (choice) => send({ kind: "listChoice", choice }),
+      onInfiniteScroll: () => send({ kind: "setPagination", mode: "infiniteScroll" }),
+      onFinishScope: () => send({ kind: "finishScope" }),
     },
     isTop,
   );
-  const capture = installCapture({ send, register, overlay, getMode: () => mode });
+  const capture = installCapture({
+    send,
+    register,
+    registerGroup,
+    overlay,
+    getStatus: () => current,
+  });
 
   const applyStatus = (status: RecorderStatus) => {
-    mode = status.mode;
-    if (mode !== "markField") overlay.highlight(null);
+    current = status;
+    if (status.mode === "record") overlay.highlight(null);
     overlay.setStatus(status);
+    capture.refresh();
   };
   api.flush = capture.flush;
   api.receive = (message) => {
     if (message.kind === "status") applyStatus(message);
     else if (message.kind === "prompt") overlay.prompt(message.pickId, message.samples);
+    else if (message.kind === "promptList")
+      overlay.promptList(message.count, message.canWiden, message.canNarrow);
+    else if (message.kind === "listChoice") capture.chooseList(message.choice);
     else overlay.toast(message.text, message.level);
   };
 

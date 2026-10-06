@@ -240,6 +240,121 @@ describe("postProcess", () => {
   });
 });
 
+describe("postProcess: lists, detail pages and pagination", () => {
+  const itemTarget = (css: string): Target => ({ ...target(css), relativeTo: "item" });
+  const itemField = (name: string): RawItem => {
+    const item = field(name);
+    return item.kind === "field"
+      ? { ...item, field: { ...item.field, target: itemTarget(`.${name}`) } }
+      : item;
+  };
+  const marker = (item: Record<string, unknown>) => ({ ...item, at: tick() }) as RawItem;
+  const listStart = () => marker({ kind: "listStart", items: target("li.job") });
+  const detailStart = () =>
+    marker({ kind: "detailStart", link: itemTarget("a.title"), strategy: "newTab" });
+  const scopeEnd = () => marker({ kind: "scopeEnd" });
+  const nextPage = () => marker({ kind: "paginate", mode: "nextButton", next: target("a.next") });
+  const infinite = () => marker({ kind: "paginate", mode: "infiniteScroll" });
+
+  /** Outline of a step tree with ids, e.g. `s2:forEach[s3:extract:item(title)]`. */
+  const tree = (steps: ReturnType<typeof postProcess>): string =>
+    steps
+      .map((result) => {
+        const label =
+          result.type === "extract"
+            ? `extract:${result.scope}(${result.fields.map((f) => f.name).join(",")})`
+            : result.type === "paginate"
+              ? `paginate:${result.mode}`
+              : result.type;
+        return `${result.id}:${label}${"body" in result ? `[${tree(result.body)}]` : ""}`;
+      })
+      .join(" ");
+
+  it("nests item fields, the detail page and later item fields, with ids in reading order", () => {
+    const steps = postProcess([
+      navigate("https://x.example/jobs"),
+      listStart(),
+      itemField("title"),
+      itemField("location"),
+      detailStart(),
+      field("description"),
+      click("button.more"),
+      field("benefits"),
+      scopeEnd(),
+      itemField("salaryText"),
+      scopeEnd(),
+      field("company"),
+    ]);
+    expect(tree(steps)).toBe(
+      "s1:navigate s2:forEach[s3:extract:item(title,location) s4:openDetail[s5:extract:page(description) s6:click s7:extract:page(benefits)] s8:extract:item(salaryText)] s9:extract:page(company)",
+    );
+  });
+
+  it("wraps the list in pagination, whether marked inside the list or after it", () => {
+    const inside = postProcess([listStart(), itemField("title"), nextPage()]);
+    expect(tree(inside)).toBe("s1:paginate:nextButton[s2:forEach[s3:extract:item(title)]]");
+    expect(inside[0]).toMatchObject({
+      until: "nextMissingOrDisabled",
+      next: { locators: [{ value: "a.next" }] },
+    });
+
+    const after = postProcess([listStart(), itemField("title"), scopeEnd(), infinite()]);
+    expect(tree(after)).toBe("s1:paginate:infiniteScroll[s2:forEach[s3:extract:item(title)]]");
+    expect(after[0]).toMatchObject({ until: "noNewItems" });
+    expect(after[0]).not.toHaveProperty("next");
+  });
+
+  it("lets a later pagination choice replace an earlier one, and ignores one without a list", () => {
+    expect(tree(postProcess([listStart(), nextPage(), infinite(), itemField("title")]))).toBe(
+      "s1:paginate:infiniteScroll[s2:forEach[s3:extract:item(title)]]",
+    );
+    expect(tree(postProcess([navigate("https://x.example/"), nextPage()]))).toBe("s1:navigate");
+  });
+
+  it("runs page-level actions made while a list is open once, before the list", () => {
+    const start = navigate("https://x.example/jobs");
+    const list = listStart();
+    const title = itemField("title");
+    const search = fill("#q", "rust", { elementKey: "q" });
+    const submit = step({ type: "press", key: "Enter" }, { urlBefore: "https://x.example/jobs" });
+    const expand = step({ type: "click", target: itemTarget("button.expand") });
+    const steps = postProcess(
+      [start, list, title, search, submit, expand, nextPage()],
+      [{ url: "https://x.example/jobs?q=rust", at: submit.at + 20 }],
+    );
+    expect(tree(steps)).toBe(
+      "s1:navigate s2:fill s3:press s4:waitFor s5:paginate:nextButton[s6:forEach[s7:extract:item(title) s8:click]]",
+    );
+  });
+
+  it("does not credit the navigation into or out of a detail page to an earlier action", () => {
+    const filter = click("button.filter", { urlBefore: "https://x.example/jobs" });
+    const list = listStart();
+    const title = itemField("title");
+    const open = detailStart();
+    const description = field("description");
+    const back = scopeEnd();
+    const steps = postProcess(
+      [filter, list, title, open, description, back],
+      [
+        { url: "https://x.example/jobs/7", at: open.at + 30 },
+        { url: "https://x.example/jobs", at: back.at + 30 },
+      ],
+    );
+    expect(tree(steps)).toBe(
+      "s1:click s2:forEach[s3:extract:item(title) s4:openDetail[s5:extract:page(description)]]",
+    );
+  });
+
+  it("closes scopes left open, and ignores stray markers", () => {
+    expect(
+      tree(
+        postProcess([scopeEnd(), detailStart(), listStart(), detailStart(), field("description")]),
+      ),
+    ).toBe("s1:forEach[s2:openDetail[s3:extract:page(description)]]");
+  });
+});
+
 describe("urlWaitPattern", () => {
   it.each([
     ["https://x.example/jobs", "**/jobs*"],

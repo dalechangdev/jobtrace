@@ -9,7 +9,14 @@ import {
   type Target,
 } from "@jobtrace/core";
 import { buildLocator } from "@jobtrace/runner";
-import { type Browser, type BrowserContext, chromium, type Frame, type Page } from "playwright";
+import {
+  type Browser,
+  type BrowserContext,
+  chromium,
+  type Frame,
+  type Page,
+  type Locator as PageLocator,
+} from "playwright";
 import { injectedScript } from "./bundle.ts";
 import {
   API_NAME,
@@ -80,18 +87,20 @@ const VERIFY_TIMEOUT_MS = 1500;
 /**
  * Checks each generated locator with the real Playwright engine while the
  * element is still on the page, and drops those that do not resolve to exactly
- * that element. When the page has already moved on (a click that navigated),
- * nothing can be checked and the locators are kept as generated.
+ * that element (`root` is the frame, or a list item for item-relative locators).
+ * When the page has already moved on (a click that navigated), nothing can be
+ * checked and the locators are kept as generated.
  */
 async function verifyLocators(
   frame: Frame,
+  root: Frame | PageLocator,
   locators: readonly Locator[],
   ref: ElementRef,
 ): Promise<Locator[]> {
   const check = async (): Promise<Locator[] | null> => {
     const kept: Locator[] = [];
     for (const spec of locators) {
-      const locator = buildLocator(frame, spec);
+      const locator = buildLocator(root, spec);
       if ((await locator.count()) !== 1) continue;
       const same = await locator.evaluate(
         (element, [api, key]) =>
@@ -102,11 +111,44 @@ async function verifyLocators(
       );
       if (same) kept.push(spec);
     }
-    const nonce = await frame.evaluate(
-      (api) => (window as unknown as ApiWindow)[api]?.nonce,
-      API_NAME,
-    );
-    return nonce === ref.nonce ? kept : null;
+    return (await sameDocument(frame, ref)) ? kept : null;
+  };
+  const verified = await Promise.race([
+    check().catch(() => null),
+    delay(VERIFY_TIMEOUT_MS).then(() => null),
+  ]);
+  return verified && verified.length > 0 ? verified : [...locators];
+}
+
+async function sameDocument(frame: Frame, ref: ElementRef): Promise<boolean> {
+  const nonce = await frame.evaluate(
+    (api) => (window as unknown as ApiWindow)[api]?.nonce,
+    API_NAME,
+  );
+  return nonce === ref.nonce;
+}
+
+/** Like verifyLocators, for a list: a locator must match exactly the marked items. */
+async function verifyListLocators(
+  frame: Frame,
+  locators: readonly Locator[],
+  group: ElementRef,
+  count: number,
+): Promise<Locator[]> {
+  const check = async (): Promise<Locator[] | null> => {
+    const kept: Locator[] = [];
+    for (const spec of locators) {
+      const locator = buildLocator(frame, spec);
+      if ((await locator.count()) !== count) continue;
+      const same = await locator.evaluateAll(
+        (elements, [api, key]) =>
+          (window as unknown as ApiWindow)[api as string]?.isGroup(key as string, elements) ===
+          true,
+        [API_NAME, group.key],
+      );
+      if (same) kept.push(spec);
+    }
+    return (await sameDocument(frame, group)) ? kept : null;
   };
   const verified = await Promise.race([
     check().catch(() => null),
@@ -146,6 +188,22 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
     { target: Target; link?: Target; samples: FieldSamples; baseUrl: string }
   >();
   const pages = new Set<Page>();
+  type ListScope = { kind: "list"; target: Target; count: number };
+  type DetailScope = {
+    kind: "detail";
+    /** The tab showing the detail page: the list's own tab, or a new one the link opened. */
+    page: Page;
+    listPage: Page;
+    listUrl: string;
+    popup: boolean;
+  };
+  /** Open scopes, innermost last. At most a list with a detail page inside it. */
+  const scopes: Array<ListScope | DetailScope> = [];
+  let hasList = false;
+  /** The frame that proposed list candidates and awaits the user's choice. */
+  let listPickFrame: Frame | undefined;
+  /** True while the recorder itself navigates (back to the list); nothing is recorded then. */
+  let selfNavigating = false;
   let mode: RecorderMode = "record";
   let activePage: Page | undefined;
   let lastTitle = "";
@@ -172,11 +230,22 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
     warnings.push(message);
     emit("warn", "warning", message);
   };
-  const status = (): RecorderStatus => ({
-    mode,
-    steps: items.filter((item) => item.kind === "step").length,
-    fields: [...new Set(items.flatMap((item) => (item.kind === "field" ? [item.field.name] : [])))],
-  });
+  const innermost = () => scopes.at(-1);
+  const status = (): RecorderStatus => {
+    const scope = innermost();
+    return {
+      mode,
+      steps: items.filter((item) => item.kind === "step").length,
+      fields: [
+        ...new Set(items.flatMap((item) => (item.kind === "field" ? [item.field.name] : []))),
+      ],
+      scope: scope?.kind ?? "none",
+      ...(scope?.kind === "list"
+        ? { list: { locators: scope.target.locators, count: scope.count } }
+        : {}),
+      hasList,
+    };
+  };
   const enqueue = (task: () => Promise<void>) => {
     queue = queue.then(task).catch((error) => warn(`Recorder error: ${(error as Error).message}`));
   };
@@ -196,9 +265,31 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
   const toast = (page: Page, text: string, level: "info" | "warn" = "info") =>
     void tell(page.mainFrame(), { kind: "toast", text, level });
 
-  async function toTarget(frame: Frame, wire: WireTarget, ref: ElementRef): Promise<Target | null> {
+  const setMode = (next: RecorderMode) => {
+    mode = next;
+    broadcastStatus();
+  };
+
+  /**
+   * Finalizes a target reported by the page. With `item`, the locators are
+   * relative to that item of the open list and are checked inside it.
+   */
+  async function toTarget(
+    frame: Frame,
+    wire: WireTarget,
+    ref: ElementRef,
+    item?: { index: number },
+  ): Promise<Target | null> {
     if (wire.locators.length === 0) return null;
-    const locators = await verifyLocators(frame, wire.locators, ref);
+    if (item) {
+      // The frame object itself is not compared: it is replaced when the page reloads.
+      const list = scopes.find((scope) => scope.kind === "list");
+      if (!list) return null;
+      const root = buildLocator(frame, list.target.locators[0] as Locator).nth(item.index);
+      const locators = await verifyLocators(frame, root, wire.locators, ref);
+      return { locators, fingerprint: wire.fingerprint, frame: [], relativeTo: "item" };
+    }
+    const locators = await verifyLocators(frame, frame, wire.locators, ref);
     return {
       locators,
       fingerprint: wire.fingerprint,
@@ -213,7 +304,9 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
     message: Extract<PageMessage, { kind: "action" }>,
   ) {
     const target =
-      message.target && message.ref ? await toTarget(frame, message.target, message.ref) : null;
+      message.target && message.ref
+        ? await toTarget(frame, message.target, message.ref, message.item)
+        : null;
     let step: StepDraft;
     if (message.action === "press") {
       step = { type: "press", key: message.key ?? "Enter", ...(target ? { target } : {}) };
@@ -243,10 +336,12 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
   }
 
   async function onPick(frame: Frame, page: Page, message: Extract<PageMessage, { kind: "pick" }>) {
-    const target = await toTarget(frame, message.target, message.ref);
+    const target = await toTarget(frame, message.target, message.ref, message.item);
     if (!target)
       return toast(page, "Could not find a reliable way to locate that element.", "warn");
-    const link = message.link ? await toTarget(frame, message.link.target, message.link.ref) : null;
+    const link = message.link
+      ? await toTarget(frame, message.link.target, message.link.ref, message.item)
+      : null;
     const pickId = ++pickSeq;
     picks.set(pickId, {
       target,
@@ -255,6 +350,98 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
       baseUrl: frame.url(),
     });
     await tell(page.mainFrame(), { kind: "prompt", pickId, samples: message.samples });
+  }
+
+  async function onListConfirmed(
+    frame: Frame,
+    page: Page,
+    message: Extract<PageMessage, { kind: "listConfirmed" }>,
+  ) {
+    if (innermost())
+      return toast(page, "Finish the current list before marking another one.", "warn");
+    if (message.target.locators.length === 0) {
+      return toast(page, "Could not find a reliable way to locate those items.", "warn");
+    }
+    const locators = await verifyListLocators(
+      frame,
+      message.target.locators,
+      message.group,
+      message.count,
+    );
+    const target: Target = {
+      locators,
+      fingerprint: message.target.fingerprint,
+      frame: await frameChain(frame),
+      relativeTo: null,
+    };
+    items.push({ kind: "listStart", items: target, at: Date.now() });
+    scopes.push({ kind: "list", target, count: message.count });
+    hasList = true;
+    emit("info", "list", `List of ${message.count} items`);
+    toast(page, `List of ${message.count} items. Now mark the data inside one of them.`);
+    setMode("markField");
+  }
+
+  async function onDetailPick(frame: Frame, message: Extract<PageMessage, { kind: "detailPick" }>) {
+    const link = await toTarget(frame, message.target, message.ref, message.item);
+    if (!link) return warn("The detail link was skipped: no reliable way to find it in each item.");
+    let followable = false;
+    try {
+      followable =
+        message.href !== undefined && /^https?:$/.test(new URL(message.href, message.url).protocol);
+    } catch {
+      // Not a URL: the link has to be clicked.
+    }
+    // A real address can be opened in its own tab, which leaves the list page untouched.
+    items.push({
+      kind: "detailStart",
+      link,
+      strategy: followable ? "newTab" : "sameTab",
+      at: message.at,
+    });
+    emit("info", "detail", "Opening a detail page");
+  }
+
+  async function onNextPick(
+    frame: Frame,
+    page: Page,
+    message: Extract<PageMessage, { kind: "nextPick" }>,
+  ) {
+    const target = await toTarget(frame, message.target, message.ref);
+    if (!target)
+      return toast(page, "Could not find a reliable way to locate that control.", "warn");
+    items.push({ kind: "paginate", mode: "nextButton", next: target, at: Date.now() });
+    emit("info", "paginate", "Next-page control marked");
+    toast(page, "Next-page control saved. Replays keep clicking it until it is gone or disabled.");
+    setMode(innermost()?.kind === "list" ? "markField" : "record");
+  }
+
+  /** Finish list / Back to list. Leaving a detail page also takes the browser back. */
+  async function finishScope() {
+    const scope = innermost();
+    if (!scope) return;
+    if (scope.kind === "detail") {
+      selfNavigating = true;
+      try {
+        if (scope.popup) await scope.page.close().catch(() => {});
+        else {
+          for (let attempt = 0; attempt < 3 && scope.listPage.url() !== scope.listUrl; attempt++) {
+            await scope.listPage.goBack().catch(() => null);
+          }
+          if (scope.listPage.url() !== scope.listUrl) {
+            await scope.listPage.goto(scope.listUrl).catch(() => null);
+          }
+        }
+        await delay(100);
+      } finally {
+        selfNavigating = false;
+      }
+      activePage = scope.listPage;
+    }
+    // Only now: until the browser is back, the pages must keep seeing the old scope.
+    scopes.pop();
+    items.push({ kind: "scopeEnd", at: Date.now() });
+    setMode(scope.kind === "detail" ? "markField" : "record");
   }
 
   function onFieldNamed(page: Page, message: Extract<PageMessage, { kind: "fieldNamed" }>) {
@@ -300,10 +487,68 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
     switch (message.kind) {
       case "hello":
         return status();
-      case "setMode":
-        mode = message.mode;
-        emit("info", "mode", mode === "markField" ? "Marking fields" : "Recording actions");
-        broadcastStatus();
+      case "setMode": {
+        const scope = innermost()?.kind ?? "none";
+        const allowed =
+          message.mode === "markList"
+            ? scope === "none"
+            : message.mode === "openDetail"
+              ? scope === "list"
+              : message.mode === "markNext"
+                ? hasList && scope !== "detail"
+                : true;
+        if (!allowed) return undefined;
+        emit("info", "mode", message.mode);
+        setMode(message.mode);
+        return undefined;
+      }
+      case "notice":
+        toast(page, message.text, message.level);
+        return undefined;
+      case "listPick":
+        listPickFrame = frame;
+        void tell(page.mainFrame(), {
+          kind: "promptList",
+          count: message.count,
+          canWiden: message.canWiden,
+          canNarrow: message.canNarrow,
+        });
+        return undefined;
+      case "listChoice":
+        if (listPickFrame) void tell(listPickFrame, { kind: "listChoice", choice: message.choice });
+        if (message.choice === "cancel") listPickFrame = undefined;
+        return undefined;
+      case "listConfirmed":
+        listPickFrame = undefined;
+        enqueue(() => onListConfirmed(frame, page, message));
+        return undefined;
+      case "detailPick": {
+        if (innermost()?.kind !== "list") return undefined;
+        // Decided right away: the click is already navigating or opening a tab.
+        // The page reports its own URL: by now the browser may already show the detail page.
+        scopes.push({
+          kind: "detail",
+          page,
+          listPage: page,
+          listUrl: frame === page.mainFrame() ? message.url : page.url(),
+          popup: false,
+        });
+        setMode("markField");
+        enqueue(() => onDetailPick(frame, message));
+        return undefined;
+      }
+      case "nextPick":
+        if (!hasList) return undefined;
+        enqueue(() => onNextPick(frame, page, message));
+        return undefined;
+      case "setPagination":
+        if (!hasList) return undefined;
+        items.push({ kind: "paginate", mode: "infiniteScroll", at: Date.now() });
+        emit("info", "paginate", "Infinite scroll");
+        toast(page, "Replays will scroll this list until no more jobs load.");
+        return undefined;
+      case "finishScope":
+        enqueue(finishScope);
         return undefined;
       case "stop":
         void finish().catch(() => {});
@@ -382,6 +627,14 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
     };
     const openedAsPopup = (url: string) => {
       popupPending = false;
+      const scope = innermost();
+      if (scope?.kind === "detail" && !scope.popup && scope.page !== page) {
+        // The detail link opened its own tab: that tab is the detail page.
+        scope.page = page;
+        scope.popup = true;
+        broadcastStatus();
+        return;
+      }
       warn(
         "A click opened a new tab. Replays stay in one tab, so the recording navigates to that tab's address instead.",
       );
@@ -399,13 +652,15 @@ export async function startRecording(options: RecorderOptions): Promise<Recordin
       const url = frame.url + (frame.urlFragment ?? "");
       const typed = navigationStart;
       navigationStart = undefined;
-      if (closed || url === "about:blank" || url.startsWith("chrome-error:")) return;
+      if (closed || selfNavigating || url === "about:blank" || url.startsWith("chrome-error:")) {
+        return;
+      }
       if (popupPending) openedAsPopup(url);
       else if (pageStarted) navigations.push({ url, at: Date.now(), seq: navigationSeq++ });
       else pushNavigate(typed ?? url);
     });
     cdp.on("Page.navigatedWithinDocument", (event) => {
-      if (!closed && event.frameId === frameTree.frame.id)
+      if (!closed && !selfNavigating && event.frameId === frameTree.frame.id)
         navigations.push({ url: event.url, at: Date.now(), seq: navigationSeq++ });
     });
     if (popupPending && page.url() !== "" && page.url() !== "about:blank")
