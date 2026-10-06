@@ -264,6 +264,9 @@ importers:
       '@jobtrace/sources':
         specifier: workspace:*
         version: link:../sources
+      croner:
+        specifier: ^10.0.1
+        version: 10.0.1
     devDependencies:
       '@jobtrace/recorder':
         specifier: workspace:*
@@ -1904,6 +1907,11 @@ packages:
   /cookie@1.1.1:
     resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
     engines: {node: '>=18'}
+    dev: false
+
+  /croner@10.0.1:
+    resolution: {integrity: sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g==}
+    engines: {node: '>=18.0'}
     dev: false
 
   /csstype@3.2.3:

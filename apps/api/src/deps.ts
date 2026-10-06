@@ -1,7 +1,7 @@
 import type { Config } from "@jobtrace/core";
 import type { Database } from "@jobtrace/db";
 import type { Politeness } from "@jobtrace/politeness";
-import type { JobQueue, RunHub, Worker, WorkerOptions } from "@jobtrace/scheduler";
+import type { JobQueue, RunHub, Scheduler, Worker, WorkerOptions } from "@jobtrace/scheduler";
 import type { FetchSourceOptions } from "@jobtrace/sources";
 import type {
   FastifyBaseLogger,
@@ -20,6 +20,7 @@ export interface AppDeps {
   config: Config;
   queue: JobQueue;
   worker: Worker;
+  scheduler: Scheduler;
   hub: RunHub;
   politeness?: Politeness;
   /** Settings that can change while the server runs. */

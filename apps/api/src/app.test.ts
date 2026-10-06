@@ -725,6 +725,106 @@ describe("support for the web UI", () => {
   });
 });
 
+describe("schedules", () => {
+  it("creates, previews, lists, pauses and deletes schedules", async () => {
+    const id = await createBoard();
+    const preview = await api(
+      "GET",
+      `/api/schedules/preview?cron=${encodeURIComponent("0 8 * * 1-5")}&timezone=Europe/Madrid`,
+    );
+    expect(preview.body).toMatchObject({
+      description: "Weekdays at 08:00 Europe/Madrid",
+      effectiveTimezone: "Europe/Madrid",
+    });
+    expect(preview.body.nextRuns).toHaveLength(5);
+    const tooOften = await api(
+      "GET",
+      `/api/schedules/preview?cron=${encodeURIComponent("* * * * *")}`,
+    );
+    expect(tooOften.status).toBe(400);
+    expect(tooOften.body.error.message).toMatch(/at most every 15 minutes/);
+
+    const created = await api("POST", "/api/schedules", {
+      recordingId: id,
+      cron: "0 8 * * 1-5",
+      timezone: "Europe/Madrid",
+    });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({
+      recordingId: id,
+      enabled: true,
+      description: "Weekdays at 08:00 Europe/Madrid",
+      lastRunAt: null,
+      nextRunAt: created.body.nextRuns[0],
+    });
+    expect(server.scheduler.registered()).toEqual([created.body.id]);
+    expect(
+      (await api("POST", "/api/schedules", { recordingId: "rec_nope", cron: "0 8 * * *" })).status,
+    ).toBe(404);
+    expect(
+      (await api("POST", "/api/schedules", { recordingId: id, cron: "every morning" })).body.error
+        .message,
+    ).toMatch(/needs five fields/);
+    expect(
+      (
+        await api("POST", "/api/schedules", {
+          recordingId: id,
+          cron: "0 8 * * *",
+          timezone: "Mars/Olympus",
+        })
+      ).status,
+    ).toBe(400);
+
+    const paused = await api("PUT", `/api/schedules/${created.body.id}`, { enabled: false });
+    expect(paused.body).toMatchObject({ enabled: false, nextRuns: [], cron: "0 8 * * 1-5" });
+    expect(server.scheduler.registered()).toEqual([]);
+    const moved = await api("PUT", `/api/schedules/${created.body.id}`, {
+      enabled: true,
+      cron: "30 7 * * *",
+      timezone: null,
+    });
+    expect(moved.body.description).toMatch(/^Every day at 07:30 /);
+    expect(moved.body.timezone).toBeNull();
+    expect(server.scheduler.registered()).toEqual([created.body.id]);
+    expect((await api("PUT", "/api/schedules/sch_nope", { enabled: true })).status).toBe(404);
+
+    expect((await api("GET", "/api/schedules")).body).toHaveLength(1);
+    expect((await api("GET", `/api/schedules?recording=${id}`)).body).toHaveLength(1);
+    expect((await api("GET", "/api/schedules?recording=rec_other")).body).toEqual([]);
+    expect((await api("DELETE", `/api/schedules/${created.body.id}`)).status).toBe(204);
+    expect((await api("DELETE", `/api/schedules/${created.body.id}`)).status).toBe(404);
+    expect(server.scheduler.registered()).toEqual([]);
+  });
+
+  it("a schedule tick queues a run that the worker executes, and a tick during a run is skipped", async () => {
+    const id = await createBoard(SITES.changing, [{ id: "wait", type: "waitFor", ms: 400 }]);
+    const schedule = (await api("POST", "/api/schedules", { recordingId: id, cron: "0 8 * * *" }))
+      .body;
+
+    expect(await server.scheduler.fire(schedule.id)).toBe("enqueued");
+    // The same schedule fires again while its run is still going.
+    expect(await server.scheduler.fire(schedule.id)).toBe("skipped");
+    await server.worker.idle();
+
+    const runs = (await api("GET", `/api/runs?recording=${id}`)).body;
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      status: "succeeded",
+      trigger: "schedule",
+      scheduleId: schedule.id,
+      stats: { jobs: 5, newJobs: 5 },
+    });
+    const after = (await api("GET", "/api/schedules")).body[0];
+    expect(after.lastRunAt).not.toBeNull();
+    expect(after.nextRunAt).toBe(after.nextRuns[0]);
+
+    // Deleting the recording takes its schedule along.
+    await api("DELETE", `/api/recordings/${id}`);
+    expect((await api("GET", "/api/schedules")).body).toEqual([]);
+    expect(await server.scheduler.fire(schedule.id)).toBe("gone");
+  });
+});
+
 describe("security and documentation", () => {
   it("only answers requests addressed to localhost, and refuses cross-site requests", async () => {
     expect((await api("GET", "/api/health")).status).toBe(200);
@@ -797,6 +897,10 @@ describe("security and documentation", () => {
         "/api/jobs",
         "/api/jobs/{id}",
         "/api/auth-profiles",
+        "/api/schedules",
+        "/api/schedules/{id}",
+        "/api/schedules/preview",
+        "/api/settings",
         "/api/health",
       ]),
     );

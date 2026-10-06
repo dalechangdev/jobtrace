@@ -606,6 +606,100 @@ describe("jobtrace serve", () => {
   });
 });
 
+describe("jobtrace schedule", () => {
+  it("adds, lists, pauses, resumes and removes schedules", async () => {
+    const file = join(dataDir, "scheduled.jobtrace.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 2,
+        id: "rec_scheduled",
+        name: "Scheduled board",
+        startUrl: sites.url(SITES.changing),
+        steps: [],
+      }),
+    );
+    await cli(["recordings", "import", file]);
+
+    const added = await cli([
+      "schedule",
+      "add",
+      "Scheduled board",
+      "--cron",
+      "0 8 * * 1-5",
+      "--tz",
+      "Europe/Madrid",
+    ]);
+    expect(added.code).toBe(0);
+    const id = added.stdout.trim();
+    expect(id).toMatch(/^sch_/);
+    expect(added.stderr).toContain('Scheduled "Scheduled board": Weekdays at 08:00 Europe/Madrid');
+    expect(added.stderr).toMatch(/Next runs: \d{4}-\d\d-\d\d \d\d:\d\d, /);
+    expect(added.stderr).toContain("Schedules only fire while `jobtrace serve` is running");
+
+    const list = await cli(["schedule", "list"]);
+    expect(list.stdout).toMatch(/ID\s+RECORDING\s+WHEN\s+NEXT RUN\s+LAST RUN/);
+    expect(list.stdout).toMatch(
+      new RegExp(
+        `${id}\\s+Scheduled board\\s+Weekdays at 08:00 Europe/Madrid\\s+\\d{4}-.*\\s+never`,
+      ),
+    );
+
+    expect((await cli(["schedule", "pause", id.slice(0, 10)])).stderr).toContain(
+      `Paused schedule ${id}.`,
+    );
+    expect((await cli(["schedule", "list"])).stdout).toMatch(/Europe\/Madrid\s+paused\s+never/);
+    expect(JSON.parse((await cli(["schedule", "list", "--json"])).stdout)).toMatchObject([
+      { id, enabled: false, nextRuns: [] },
+    ]);
+    expect((await cli(["schedule", "resume", id])).code).toBe(0);
+
+    expect(
+      (await cli(["schedule", "add", "Scheduled board", "--cron", "* * * * *"])).stderr,
+    ).toMatch(/at most every 15 minutes/);
+    expect(
+      (await cli(["schedule", "add", "Scheduled board", "--cron", "0 8 * * *", "--tz", "Nowhere"]))
+        .stderr,
+    ).toMatch(/not a known time zone/);
+    expect((await cli(["schedule", "add", "nope", "--cron", "0 8 * * *"])).stderr).toMatch(
+      /No recording matches/,
+    );
+    expect((await cli(["schedule", "remove", "sch_nope"])).stderr).toMatch(/No schedule matches/);
+
+    expect((await cli(["schedule", "remove", id])).stderr).toContain(`Removed schedule ${id}.`);
+    expect((await cli(["schedule", "list"])).stderr).toContain("No schedules.");
+  });
+
+  it("a running server picks up a schedule added from the command line", async () => {
+    const added = await cli(["schedule", "add", "rec_scheduled", "--cron", "0 8 * * *"]);
+    const id = added.stdout.trim();
+    const controller = new AbortController();
+    let registered: string[] = [];
+    await cli(["serve"], {
+      signal: controller.signal,
+      server: { port: 0, scheduleSyncMs: 50, worker: { pollIntervalMs: 50 } },
+      onServer: (server) => {
+        void (async () => {
+          try {
+            const first = server.scheduler.registered();
+            // Added while the server is already running, straight into the database.
+            const second = (
+              await cli(["schedule", "add", "rec_scheduled", "--cron", "0 9 * * *"])
+            ).stdout.trim();
+            await expect
+              .poll(() => server.scheduler.registered().sort())
+              .toEqual([id, second].sort());
+            registered = first;
+          } finally {
+            controller.abort();
+          }
+        })();
+      },
+    });
+    expect(registered).toEqual([id]);
+  }, 30_000);
+});
+
 describe("API sources", () => {
   const baseUrl = (provider: "greenhouse" | "lever" | "ashby") => sites.url(ATS_PATHS[provider]);
   const setVersion = (version: number) =>

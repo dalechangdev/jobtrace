@@ -7,6 +7,7 @@ import type {
   ApiRecordingListItem,
   ApiRun,
   ApiRunDetail,
+  ApiSchedule,
   ApiSession,
   ApiSettings,
   ApiTestStepResult,
@@ -150,6 +151,18 @@ export const api = {
   sessions: {
     get: (id: string) => get<ApiSession>(`/api/record-sessions/${id}`),
     stop: (id: string) => request<ApiSession>("POST", `/api/record-sessions/${id}/stop`),
+  },
+  schedules: {
+    list: (recording?: string) => get<ApiSchedule[]>(`/api/schedules${query({ recording })}`),
+    preview: (cron: string, timezone?: string) =>
+      get<{ description: string; effectiveTimezone: string; nextRuns: string[] }>(
+        `/api/schedules/preview${query({ cron, timezone })}`,
+      ),
+    create: (input: { recordingId: string; cron: string; timezone?: string | null }) =>
+      request<ApiSchedule>("POST", "/api/schedules", input),
+    update: (id: string, patch: { cron?: string; timezone?: string | null; enabled?: boolean }) =>
+      request<ApiSchedule>("PUT", `/api/schedules/${id}`, patch),
+    remove: (id: string) => request<void>("DELETE", `/api/schedules/${id}`),
   },
   settings: {
     get: () => get<ApiSettings>("/api/settings"),

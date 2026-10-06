@@ -7,7 +7,8 @@ source.
 > **Status: early.** You can record a job board with `jobtrace record`, replay it
 > with `jobtrace run`, and browse what it found, including which jobs are new or
 > changed since the last run (milestones M0–M4 of [PLAN.md](PLAN.md)). It is all
-> by command line, HTTP API or web UI. Scheduled runs are not built yet.
+> by command line, HTTP API or web UI, and can run on a schedule. Packaging (Docker) and
+the optional AI locator fallback are not built yet.
 
 ## Quickstart
 
@@ -37,7 +38,8 @@ is stored in a SQLite database under `DATA_DIR` (default `~/.jobtrace`).
 | `recordings list` / `show` / `export` / `import` / `delete` | Manage stored recordings. `export` and `import` use `.jobtrace.json` files, which can be shared or kept in Git. |
 | `runs list` / `show <run>` | Past runs: status, counts, errors, artifacts; `show --events` prints the log. |
 | `jobs list` | Jobs found so far, newest first. Filters: `--new`, `--recording`, `--since 7d`, `--search text`, `--all`. |
-| `serve` | Run the HTTP API and the worker that executes queued runs. |
+| `schedule add` / `list` / `pause` / `resume` / `remove` | Run a recording or source automatically. |
+| `serve` | Run the web UI, the HTTP API, the worker and the scheduler. |
 | `db migrate` | Create or upgrade the database (also happens automatically). |
 
 Recordings and runs can be referred to by id, by the first characters of the id, or
@@ -88,6 +90,23 @@ saved logins and when each last worked; `auth delete` removes one.
 Anyone who can read a saved session file can act as you on that site. See
 [SECURITY.md](SECURITY.md).
 
+### Running on a schedule
+
+```sh
+jobtrace schedule add "Acme board" --cron "0 8 * * 1-5" --tz Europe/Madrid
+jobtrace schedule list
+```
+
+or use the **Schedules** page, which offers "every weekday at…" style choices and
+shows what a schedule means and when it will next run before you save it.
+
+- **Schedules only fire while `jobtrace serve` is running.** Runs that were due while
+  it was off are skipped, not caught up; the server log says so.
+- A schedule may fire at most every 15 minutes.
+- If a recording's previous run is still going when its next one is due, that tick is
+  skipped rather than stacked up.
+- Without `--tz`, times are in the time zone of the computer running the server.
+
 ### New, changed and closed jobs
 
 Each tracked run compares what it found with what earlier runs of the same recording
@@ -128,6 +147,8 @@ pnpm jobtrace serve     # then open http://127.0.0.1:4317
   **New** and **Changed** badges.
 - **Jobs**: search and filter everything found so far, open a job's details, export
   the result as CSV or JSON.
+- **Schedules**: run a recording every weekday, every few hours, or on a custom cron
+  expression. The dashboard lists what is coming up.
 - **Saved logins** and **Settings**.
 
 ### HTTP API

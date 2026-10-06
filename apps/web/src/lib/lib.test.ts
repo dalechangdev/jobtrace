@@ -1,5 +1,6 @@
 import { parseRecording, type Recording, type Target } from "@jobtrace/core";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_CHOICE, toCron } from "./cron.ts";
 import {
   describeLocator,
   describeStep,
@@ -168,6 +169,23 @@ describe("definition helpers", () => {
       { stepId: "s3", runs: 1, warnings: [], errors: [] },
       { stepId: "s4", runs: 2, warnings: ["Used fallback #2"], errors: ["Item 2 failed"] },
     ]);
+  });
+});
+
+describe("schedule form", () => {
+  it("builds a cron expression from the form's choices", () => {
+    expect(toCron(DEFAULT_CHOICE)).toBe("0 8 * * 1-5");
+    expect(toCron({ ...DEFAULT_CHOICE, frequency: "daily", time: "07:30" })).toBe("30 7 * * *");
+    expect(toCron({ ...DEFAULT_CHOICE, frequency: "weekly", time: "18:05", weekday: 0 })).toBe(
+      "5 18 * * 0",
+    );
+    expect(toCron({ ...DEFAULT_CHOICE, frequency: "hours", everyHours: 6 })).toBe("0 */6 * * *");
+    expect(toCron({ ...DEFAULT_CHOICE, frequency: "hours", everyHours: 0 })).toBe("0 */1 * * *");
+    expect(toCron({ ...DEFAULT_CHOICE, frequency: "hours", everyHours: 99 })).toBe("0 */23 * * *");
+    expect(toCron({ ...DEFAULT_CHOICE, frequency: "custom", cron: " 0 6 1 * * " })).toBe(
+      "0 6 1 * *",
+    );
+    expect(toCron({ ...DEFAULT_CHOICE, frequency: "daily", time: "" })).toBe("0 0 * * *");
   });
 });
 

@@ -12,6 +12,7 @@ export type {
   RunOutcome,
   RunRecord,
   RunTrigger,
+  Schedule,
   StoredArtifact,
   StoredRecording,
   StoredRunStats,

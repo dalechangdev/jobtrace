@@ -52,6 +52,21 @@ export interface AuthProfile {
   lastVerifiedAt: string | null;
 }
 
+/** When a recording or source runs by itself. */
+export interface Schedule {
+  id: string;
+  recordingId: string;
+  /** A cron expression, e.g. `0 8 * * 1-5`. */
+  cron: string;
+  /** IANA time zone the expression is read in; null means the server's own. */
+  timezone: string | null;
+  enabled: boolean;
+  params: Record<string, string>;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  createdAt: string;
+}
+
 export type RunTrigger = "manual" | "schedule" | "cli";
 
 /** Run stats as stored: the runner's, plus what persistence learned about the jobs. */
@@ -181,6 +196,8 @@ export interface Database {
      * hold up the others. Returns null when there is nothing to take.
      */
     claimNext(busyDomains?: readonly string[]): Promise<RunRecord | null>;
+    /** True when the recording has a run that is queued or running. */
+    hasActive(recordingId: string): Promise<boolean>;
     /** Cancels a run that is still queued. Returns false when it is not queued (any more). */
     cancelQueued(id: string): Promise<boolean>;
     /** After a restart: marks runs left "running" as failed with reason `interrupted`. */
@@ -206,6 +223,21 @@ export interface Database {
     list(filter?: JobFilter): Promise<JobRecord[]>;
     count(filter?: JobFilter): Promise<number>;
     get(id: string): Promise<JobRecord | null>;
+  };
+  schedules: {
+    create(
+      input: Pick<Schedule, "recordingId" | "cron" | "timezone"> &
+        Partial<Pick<Schedule, "enabled" | "params">>,
+    ): Promise<Schedule>;
+    get(id: string): Promise<Schedule | null>;
+    list(filter?: { recordingId?: string; enabled?: boolean }): Promise<Schedule[]>;
+    update(
+      id: string,
+      patch: Partial<
+        Pick<Schedule, "cron" | "timezone" | "enabled" | "params" | "lastRunAt" | "nextRunAt">
+      >,
+    ): Promise<Schedule | null>;
+    delete(id: string): Promise<boolean>;
   };
   authProfiles: {
     /** Inserts the profile, or updates the one with the same id. Names are unique. */

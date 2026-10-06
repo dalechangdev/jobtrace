@@ -42,6 +42,7 @@ const LINKS = [
   { to: "/recordings", label: "Recordings" },
   { to: "/runs", label: "Runs" },
   { to: "/jobs", label: "Jobs" },
+  { to: "/schedules", label: "Schedules" },
   { to: "/auth", label: "Saved logins" },
   { to: "/settings", label: "Settings" },
 ];

@@ -10,6 +10,7 @@ import type {
   runDetailSchema,
   runJobSchema,
   runSchema,
+  scheduleSchema,
   sessionSchema,
   settingsViewSchema,
   testStepResultSchema,
@@ -27,6 +28,7 @@ export type ApiJob = z.infer<typeof jobRecordSchema>;
 export type ApiArtifact = z.infer<typeof artifactSchema>;
 export type ApiEvent = z.infer<typeof eventSchema>;
 export type ApiAuthProfile = z.infer<typeof authProfileSchema>;
+export type ApiSchedule = z.infer<typeof scheduleSchema>;
 export type ApiSession = z.infer<typeof sessionSchema>;
 export type ApiSettings = z.infer<typeof settingsViewSchema>;
 export type ApiTestStepResult = z.infer<typeof testStepResultSchema>;

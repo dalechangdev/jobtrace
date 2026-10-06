@@ -28,12 +28,22 @@ import type {
   RunJobRecord,
   RunRecord,
   RunTrigger,
+  Schedule,
   StoredRecording,
 } from "./types.ts";
 
 const MIGRATIONS = fileURLToPath(new URL("../migrations", import.meta.url));
-const { authProfiles, recordings, recordingVersions, runs, runEvents, jobs, runJobs, artifacts } =
-  schema;
+const {
+  authProfiles,
+  recordings,
+  recordingVersions,
+  runs,
+  runEvents,
+  jobs,
+  runJobs,
+  artifacts,
+  schedules,
+} = schema;
 
 type RunRow = typeof runs.$inferSelect;
 type JobRow = typeof jobs.$inferSelect;
@@ -65,6 +75,22 @@ function toRun(row: RunRow): RunRecord {
     finishedAt: row.finishedAt,
     stats: parseJson(row.statsJson),
     error: parseJson(row.errorJson),
+    createdAt: row.createdAt,
+  };
+}
+
+type ScheduleRow = typeof schedules.$inferSelect;
+
+function toSchedule(row: ScheduleRow): Schedule {
+  return {
+    id: row.id,
+    recordingId: row.recordingId,
+    cron: row.cron,
+    timezone: row.timezone,
+    enabled: row.enabled,
+    params: parseJson(row.paramsJson) ?? {},
+    lastRunAt: row.lastRunAt,
+    nextRunAt: row.nextRunAt,
     createdAt: row.createdAt,
   };
 }
@@ -500,6 +526,17 @@ export function openDatabase(url: string): Database {
           return row ? toRun(row) : null;
         });
       },
+      async hasActive(recordingId) {
+        const row = db
+          .select({ id: runs.id })
+          .from(runs)
+          .where(
+            and(eq(runs.recordingId, recordingId), inArray(runs.status, ["queued", "running"])),
+          )
+          .limit(1)
+          .get();
+        return row !== undefined;
+      },
       async cancelQueued(id) {
         const now = iso();
         const result = db
@@ -623,6 +660,58 @@ export function openDatabase(url: string): Database {
       async get(id) {
         const row = db.select().from(jobs).where(eq(jobs.id, id)).get();
         return row ? toJob(row) : null;
+      },
+    },
+
+    schedules: {
+      async create(input) {
+        const id = newId("schedule");
+        db.insert(schedules)
+          .values({
+            id,
+            recordingId: input.recordingId,
+            cron: input.cron,
+            timezone: input.timezone,
+            enabled: input.enabled ?? true,
+            paramsJson: JSON.stringify(input.params ?? {}),
+            createdAt: iso(),
+          })
+          .run();
+        return toSchedule(
+          db.select().from(schedules).where(eq(schedules.id, id)).get() as ScheduleRow,
+        );
+      },
+      async get(id) {
+        const row = db.select().from(schedules).where(eq(schedules.id, id)).get();
+        return row ? toSchedule(row) : null;
+      },
+      async list(filter = {}) {
+        return db
+          .select()
+          .from(schedules)
+          .where(
+            and(
+              filter.recordingId ? eq(schedules.recordingId, filter.recordingId) : undefined,
+              filter.enabled === undefined ? undefined : eq(schedules.enabled, filter.enabled),
+            ),
+          )
+          .orderBy(asc(sql`rowid`))
+          .all()
+          .map(toSchedule);
+      },
+      async update(id, patch) {
+        const { params, ...columns } = patch;
+        const set = {
+          ...columns,
+          ...(params === undefined ? {} : { paramsJson: JSON.stringify(params) }),
+        };
+        if (Object.keys(set).length > 0)
+          db.update(schedules).set(set).where(eq(schedules.id, id)).run();
+        const row = db.select().from(schedules).where(eq(schedules.id, id)).get();
+        return row ? toSchedule(row) : null;
+      },
+      async delete(id) {
+        return db.delete(schedules).where(eq(schedules.id, id)).run().changes > 0;
       },
     },
 

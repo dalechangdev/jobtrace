@@ -8,6 +8,7 @@ import { registerAuth } from "./commands/auth.ts";
 import { registerJobs } from "./commands/jobs.ts";
 import { registerRecordings } from "./commands/recordings.ts";
 import { registerRuns } from "./commands/runs.ts";
+import { registerSchedule } from "./commands/schedule.ts";
 import { registerSource } from "./commands/source.ts";
 import type { CliContext, MainIo } from "./context.ts";
 import { createLogger, type Logger } from "./logger.ts";
@@ -131,6 +132,7 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
   registerAuth(program, ctx);
   registerSource(program, ctx);
   registerRecordings(program, ctx);
+  registerSchedule(program, ctx);
   registerRuns(program, ctx, positiveInt);
   registerJobs(program, ctx, positiveInt);
 

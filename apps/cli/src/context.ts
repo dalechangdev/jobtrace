@@ -19,7 +19,7 @@ export interface MainIo {
   /** Tests: a hook to drive a login capture. */
   onAuthCapture?: (capture: AuthCapture) => void;
   /** Tests: server overrides, and a hook called once `serve` is listening. */
-  server?: Pick<ServerOptions, "port" | "worker" | "sessionHooks">;
+  server?: Pick<ServerOptions, "port" | "worker" | "sessionHooks" | "scheduleSyncMs">;
   onServer?: (server: RunningServer) => void;
 }
 

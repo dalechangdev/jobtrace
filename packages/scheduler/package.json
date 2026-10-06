@@ -12,7 +12,8 @@
     "@jobtrace/db": "workspace:*",
     "@jobtrace/politeness": "workspace:*",
     "@jobtrace/runner": "workspace:*",
-    "@jobtrace/sources": "workspace:*"
+    "@jobtrace/sources": "workspace:*",
+    "croner": "^10.0.1"
   },
   "devDependencies": {
     "@jobtrace/test-sites": "workspace:*",

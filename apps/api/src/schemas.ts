@@ -191,3 +191,21 @@ export const settingsViewSchema = runtimeSettingsSchema.extend({
   /** False when the server is reachable from other machines (windows cannot be opened then). */
   local: z.boolean(),
 });
+
+export const scheduleSchema = z.object({
+  id: z.string(),
+  recordingId: z.string(),
+  cron: z.string(),
+  timezone: z.string().nullable(),
+  enabled: z.boolean(),
+  params: z.record(z.string(), z.string()),
+  lastRunAt: z.string().nullable(),
+  nextRunAt: z.string().nullable(),
+  createdAt: z.string(),
+  /** The time zone in effect: the schedule's own, or the server's. */
+  effectiveTimezone: z.string(),
+  /** The schedule in words, e.g. "Weekdays at 08:00 Europe/Madrid". */
+  description: z.string(),
+  /** The next five times it fires. Empty while paused. */
+  nextRuns: z.array(z.string()),
+});

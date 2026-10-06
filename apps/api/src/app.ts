@@ -15,6 +15,7 @@ import { authRoutes } from "./routes/auth.ts";
 import { jobRoutes } from "./routes/jobs.ts";
 import { recordingRoutes } from "./routes/recordings.ts";
 import { runRoutes } from "./routes/runs.ts";
+import { scheduleRoutes } from "./routes/schedules.ts";
 import { settingsRoutes } from "./routes/settings.ts";
 import { registerSecurity } from "./security.ts";
 import { createSessions, type Sessions } from "./sessions.ts";
@@ -122,6 +123,7 @@ export async function buildApp(
   runRoutes(app, ctx);
   jobRoutes(app, ctx);
   authRoutes(app, ctx);
+  scheduleRoutes(app, ctx);
   settingsRoutes(app, ctx);
   await registerWebUi(app, deps.webRoot ?? DEFAULT_WEB_ROOT);
 

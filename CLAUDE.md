@@ -16,8 +16,8 @@ silently diverging. Record agreed changes in `PLAN.md` itself.
 - [x] M5 — Auth profiles and politeness
 - [x] M6 — API and worker
 - [x] M7 — Web UI
-- [ ] M8 — Scheduler  ← next
-- [ ] M9 — Packaging and docs
+- [x] M8 — Scheduler
+- [ ] M9 — Packaging and docs  ← next
 - [ ] M10 — AI fallback plugin
 
 A milestone is done when its acceptance criteria in `PLAN.md` pass, along with
@@ -58,7 +58,8 @@ A milestone is done when its acceptance criteria in `PLAN.md` pass, along with
   `RunResult` as a browser replay. No browser dependency.
 - `packages/scheduler` — run execution and queueing: `executeRun` (replay or feed fetch, plus persistence),
   the `JobQueue` over the `runs` table, the `Worker` that executes queued runs, and the
-  `RunHub` that carries live events to watchers. Cron scheduling will be added here.
+  `RunHub` that carries live events to watchers, and the `Scheduler` that turns stored
+  schedules into queued runs (`cron.ts` validates and describes cron expressions).
 - `packages/test-sites` — mock career sites; `src/data.ts` is the ground truth tests compare against
 - `apps/api` — the HTTP API (Fastify with Zod schemas and OpenAPI). `buildApp(deps)`
   assembles routes; `startServer(options)` adds the worker and listens, and is what
@@ -123,6 +124,9 @@ A milestone is done when its acceptance criteria in `PLAN.md` pass, along with
   `.source`. Anything that should work for both takes a `Definition`.
 - Feed payloads are external input: adapters validate them with lenient Zod schemas
   (unknown fields ignored, absent ones tolerated) and skip unreadable entries.
+- Time-based code is tested with Vitest fake timers (`vi.useFakeTimers`), as in
+  `scheduler/src/schedules.test.ts`; never with real waits for a cron tick. Do not use
+  fake timers in tests that drive a browser.
 - Tests never use real websites. Use the mock sites with `fastOptions()` from
   `packages/runner/src/testing.ts` (no delays, short waits, fixed clock).
 - No CAPTCHA solving, stealth plugins or fingerprint spoofing, ever. Guards in

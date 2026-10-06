@@ -5,7 +5,9 @@ import { createPoliteness } from "@jobtrace/politeness";
 import {
   createDbQueue,
   createRunHub,
+  createScheduler,
   createWorker,
+  type Scheduler,
   type Worker,
   type WorkerOptions,
 } from "@jobtrace/scheduler";
@@ -29,11 +31,14 @@ export interface ServerOptions {
   worker?: Pick<WorkerOptions, "pollIntervalMs" | "run" | "source">;
   sessionHooks?: AppDeps["sessionHooks"];
   webRoot?: AppDeps["webRoot"];
+  /** How often schedules are re-read from the database; see SchedulerOptions.syncIntervalMs. */
+  scheduleSyncMs?: number;
 }
 
 export interface RunningServer {
   app: App;
   worker: Worker;
+  scheduler: Scheduler;
   db: Database;
   /** e.g. `http://127.0.0.1:4317` */
   url: string;
@@ -64,12 +69,19 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     ...options.worker,
     onError: (error, run) => app.log.error({ err: error, runId: run.id }, "run crashed"),
   });
+  const scheduler = createScheduler({
+    db,
+    queue,
+    ...(options.scheduleSyncMs === undefined ? {} : { syncIntervalMs: options.scheduleSyncMs }),
+    onLog: (level, message, data) => app.log[level]({ ...data }, message),
+  });
   const { app, sessions } = await buildApp(
     {
       db,
       config,
       queue,
       worker,
+      scheduler,
       hub,
       politeness,
       runtime,
@@ -81,6 +93,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
   );
 
   await worker.start();
+  await scheduler.start();
   const bindHost = options.listenHost ?? config.host;
   await app.listen({ host: bindHost, port: options.port ?? config.port });
   const address = app.server.address();
@@ -95,9 +108,11 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
   return {
     app,
     worker: running,
+    scheduler,
     db,
     url: `http://${host}:${port}`,
     async close() {
+      scheduler.stop();
       await sessions.closeAll();
       await running.stop();
       await app.close();

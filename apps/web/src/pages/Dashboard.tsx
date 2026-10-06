@@ -4,8 +4,8 @@ import { Link } from "react-router";
 import { api } from "../api.ts";
 import { JobsTable } from "../components/JobsTable.tsx";
 import { RunsTable } from "../components/RunsTable.tsx";
-import { ago } from "../lib/format.ts";
-import { Button, Card, ErrorNote, Loading, PageHeader } from "../ui.tsx";
+import { ago, when } from "../lib/format.ts";
+import { Button, Card, Empty, ErrorNote, Loading, PageHeader } from "../ui.tsx";
 
 const SEEN_KEY = "jobtrace.jobsSeenAt";
 
@@ -30,6 +30,20 @@ export function Dashboard() {
     queryFn: () => api.jobs.list({ from: seenAt, pageSize: 25 }),
     refetchInterval: 10_000,
   });
+  const schedules = useQuery({
+    queryKey: ["schedules"],
+    queryFn: () => api.schedules.list(),
+    refetchInterval: 60_000,
+  });
+  /** The next few scheduled runs across all schedules, soonest first. */
+  const upcoming = useMemo(
+    () =>
+      (schedules.data ?? [])
+        .flatMap((schedule) => schedule.nextRuns.slice(0, 3).map((at) => ({ at, schedule })))
+        .sort((a, b) => a.at.localeCompare(b.at))
+        .slice(0, 5),
+    [schedules.data],
+  );
   const names = useMemo(
     () => new Map((recordings.data ?? []).map((item) => [item.id, item.name])),
     [recordings.data],
@@ -86,6 +100,43 @@ export function Dashboard() {
                 See all {fresh.data.total}
               </Link>
             </p>
+          )}
+        </Card>
+        <Card
+          title="Upcoming scheduled runs"
+          actions={
+            <Link
+              className="text-sm text-blue-700 hover:underline dark:text-blue-400"
+              to="/schedules"
+            >
+              Schedules
+            </Link>
+          }
+        >
+          {upcoming.length === 0 ? (
+            <Empty>Nothing is scheduled. Runs happen when you start them.</Empty>
+          ) : (
+            <ul
+              className="divide-y divide-zinc-100 text-sm dark:divide-zinc-800"
+              data-testid="upcoming"
+            >
+              {upcoming.map(({ at, schedule }) => (
+                <li
+                  key={`${schedule.id}-${at}`}
+                  className="flex flex-wrap items-center justify-between gap-2 px-4 py-2"
+                >
+                  <Link
+                    className="font-medium hover:underline"
+                    to={`/recordings/${schedule.recordingId}`}
+                  >
+                    {names.get(schedule.recordingId) ?? schedule.recordingId}
+                  </Link>
+                  <span className="text-zinc-500">
+                    {when(at)} · {schedule.description}
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
         </Card>
         <Card

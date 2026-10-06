@@ -302,6 +302,45 @@ describe("the web UI, end to end", () => {
     await expect.poll(() => page.locator("tbody tr").count()).toBe(2);
   });
 
+  it("schedules the recording, shows it as upcoming, and pauses it", async () => {
+    await page.getByRole("navigation").getByRole("link", { name: "Schedules" }).click();
+    await page.getByText("No schedules yet.").waitFor();
+    await page.getByRole("button", { name: "New schedule" }).click();
+    await page.getByLabel("Recording or feed").selectOption({ label: "Acme board" });
+    await page.getByLabel("Time zone").fill("Europe/Madrid");
+    const preview = page.getByTestId("schedule-preview");
+    await preview.getByText("Weekdays at 08:00 Europe/Madrid").waitFor();
+    expect(await preview.locator("li").count()).toBe(5);
+
+    await page.getByLabel("How often").selectOption("custom");
+    await page.getByRole("textbox", { name: /Cron expression/ }).fill("* * * * *");
+    await preview.getByText(/at most every 15 minutes/).waitFor();
+    expect(await page.getByRole("button", { name: "Save schedule" }).isDisabled()).toBe(true);
+    await page.getByLabel("How often").selectOption("daily");
+    await page.getByLabel("Time", { exact: true }).fill("07:30");
+    await preview.getByText("Every day at 07:30 Europe/Madrid").waitFor();
+    await page.getByRole("button", { name: "Save schedule" }).click();
+
+    const row = page.locator("tbody tr", { hasText: "Acme board" });
+    await row.getByText("Every day at 07:30 Europe/Madrid").waitFor();
+    await row.getByText("Never").waitFor();
+    expect(server.scheduler.registered()).toHaveLength(1);
+
+    await page.getByRole("link", { name: "Dashboard" }).click();
+    const upcoming = page.getByTestId("upcoming");
+    await upcoming.getByText("Every day at 07:30 Europe/Madrid").first().waitFor();
+    expect(await upcoming.locator("li").count()).toBe(3);
+
+    await page.getByRole("navigation").getByRole("link", { name: "Schedules" }).click();
+    await row.getByRole("button", { name: "Pause" }).click();
+    await row.getByText("Paused").waitFor();
+    expect(server.scheduler.registered()).toEqual([]);
+    await row.getByRole("button", { name: "Resume" }).click();
+    await row.getByRole("button", { name: "Pause" }).waitFor();
+    await row.getByRole("button", { name: "Delete" }).click();
+    await page.getByText("No schedules yet.").waitFor();
+  });
+
   it("saves and deletes a login", async () => {
     await page.getByRole("link", { name: "Saved logins" }).click();
     await page.getByText("No saved logins.").waitFor();

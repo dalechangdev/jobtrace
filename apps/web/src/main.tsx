@@ -11,6 +11,7 @@ import { RecordingDetail } from "./pages/RecordingDetail.tsx";
 import { Recordings } from "./pages/Recordings.tsx";
 import { RunDetail } from "./pages/RunDetail.tsx";
 import { Runs } from "./pages/Runs.tsx";
+import { Schedules } from "./pages/Schedules.tsx";
 import { Settings } from "./pages/Settings.tsx";
 import { Empty } from "./ui.tsx";
 
@@ -32,6 +33,7 @@ createRoot(root).render(
             <Route path="/runs" element={<Runs />} />
             <Route path="/runs/:id" element={<RunDetail />} />
             <Route path="/jobs" element={<Jobs />} />
+            <Route path="/schedules" element={<Schedules />} />
             <Route path="/auth" element={<AuthProfiles />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Empty>There is nothing at this address.</Empty>} />

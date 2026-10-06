@@ -463,6 +463,13 @@ IDs: ULIDs with prefixes (`rec_`, `run_`, `job_`, …).
 - **Missed runs**: not backfilled. Logged.
 - **Overlap**: if a recording already has a queued or running run, skip the tick and log it.
 - **Crash recovery**: on startup, runs left in `running` are marked `failed` with reason `interrupted`.
+- **Decisions made while building M8**:
+  - **Schedules may fire at most every 15 minutes.** A schedule repeats forever, so the politeness rule is enforced when it is created or changed, with five-field cron expressions only (no seconds field).
+  - **A schedule without a time zone uses the server's.** The zone in effect is always shown next to the schedule.
+  - **The schedule in words** ("Weekdays at 08:00 Europe/Madrid") and its next runs are computed by the server, which is what will run it; the UI's form asks `GET /api/schedules/preview` as you type.
+  - **Changes made from the command line reach a running server within about 30 seconds**: the scheduler re-reads the schedules periodically. Changes through the API take effect at once.
+  - **A skipped tick** (the recording still has a run queued or running) and **a missed run** (due while the server was down) are written to the server log; they do not create run rows.
+  - Extra CLI commands `schedule pause` and `schedule resume`; `PUT /api/schedules/:id` with `enabled` does the same.
 - Manual triggers (CLI or API) enqueue the same way. The CLI `run` command can also execute in-process directly (`--now`) without a server.
 
 ---
