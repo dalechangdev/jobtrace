@@ -128,6 +128,8 @@ export interface JobFilter {
   until?: string;
   /** Full-text search over title, company, location and description. */
   search?: string;
+  /** Only jobs with this work arrangement. */
+  remote?: NormalizedJob["remote"];
   /** Closed jobs are left out unless this is set. */
   includeClosed?: boolean;
   limit?: number;
@@ -154,6 +156,8 @@ export interface Database {
     resolve(ref: string): Promise<StoredRecording>;
     list(): Promise<RecordingSummary[]>;
     versions(id: string): Promise<RecordingVersion[]>;
+    /** The definition as it was saved in one version, or null when there is no such version. */
+    version(recordingId: string, versionId: string): Promise<Definition | null>;
     /** Deletes the recording with its runs, jobs and artifact rows. Returns the affected run ids. */
     delete(id: string): Promise<{ runIds: string[] }>;
   };
@@ -213,6 +217,11 @@ export interface Database {
     /** Records that a run just found the saved login to be working. */
     markVerified(id: string, at?: Date): Promise<void>;
     delete(id: string): Promise<void>;
+  };
+  /** Small key-value store for settings changed at runtime (through the UI). */
+  settings: {
+    get<T>(key: string): Promise<T | null>;
+    set(key: string, value: unknown): Promise<void>;
   };
   artifacts: {
     add(runId: string, artifacts: readonly RunArtifact[], at?: Date): Promise<void>;

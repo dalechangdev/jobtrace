@@ -74,6 +74,12 @@ export interface RunOptions {
   robots?: RobotsPolicy;
   /** Last-resort locator healing (the optional AI fallback plugin). */
   locatorResolver?: LocatorResolver;
+  /**
+   * Stop as soon as this step has run once (the first item, the first page).
+   * Used to try out one step; the values an extract step read are reported in a
+   * `step_result` event.
+   */
+  stopAfterStepId?: string;
   /** Reuse an existing browser instead of launching one. It is left open. */
   browser?: Browser;
   /** Path to a Playwright storage state file (an auth profile). */

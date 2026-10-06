@@ -33,3 +33,4 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: pnpm --filter @jobtrace/runner exec playwright install-deps chromium
       - run: pnpm test
+      - run: pnpm test:e2e

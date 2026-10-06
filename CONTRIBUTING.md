@@ -19,7 +19,12 @@ pnpm typecheck
 pnpm test
 ```
 
-`pnpm format` applies Biome's formatting and safe fixes.
+`pnpm format` applies Biome's formatting and safe fixes. Changes to the web UI or the
+API also need `pnpm test:e2e`, which builds the UI and drives it in a browser against a
+real server.
+
+To work on the UI with hot reload, run `pnpm jobtrace serve` and `pnpm dev:web`
+(http://localhost:5173) side by side, or `pnpm dev` for both at once.
 
 ## Conventions
 

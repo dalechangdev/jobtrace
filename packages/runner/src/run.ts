@@ -118,7 +118,9 @@ export async function runRecording(
         base,
         "info",
         "limit_reached",
-        `Stopped at ${thrown.limit} (${state?.settings.maxItems ?? recording.settings.maxItems})`,
+        thrown.limit === "maxItems"
+          ? `Stopped at maxItems (${state?.settings.maxItems ?? recording.settings.maxItems})`
+          : `Stopped after ${thrown.limit}`,
       );
     } else {
       try {

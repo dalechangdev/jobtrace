@@ -9,8 +9,9 @@ export interface WorkerOptions {
   queue: JobQueue;
   hub: RunHub;
   dataDir: string;
-  artifactRetentionRuns: number;
-  maxConcurrentRuns: number;
+  /** Numbers, or functions read each time so the settings can change while running. */
+  artifactRetentionRuns: number | (() => number);
+  maxConcurrentRuns: number | (() => number);
   politeness?: Politeness;
   /** How often to look for queued runs when nothing wakes the worker. */
   pollIntervalMs?: number;
@@ -49,6 +50,7 @@ export function createWorker(options: WorkerOptions): Worker {
   let stopped = true;
   let ticking = false;
   let again = false;
+  const read = (value: number | (() => number)) => (typeof value === "function" ? value() : value);
 
   async function launch(run: RunRecord, domain: string) {
     const controller = new AbortController();
@@ -56,7 +58,7 @@ export function createWorker(options: WorkerOptions): Worker {
       runId: run.id,
       trigger: run.trigger,
       dataDir: options.dataDir,
-      artifactRetentionRuns: options.artifactRetentionRuns,
+      artifactRetentionRuns: read(options.artifactRetentionRuns),
       ...(options.politeness ? { politeness: options.politeness } : {}),
       ...(run.scheduleId ? { scheduleId: run.scheduleId } : {}),
       run: { ...options.run, signal: controller.signal },
@@ -84,7 +86,7 @@ export function createWorker(options: WorkerOptions): Worker {
     try {
       do {
         again = false;
-        while (!stopped && running.size < options.maxConcurrentRuns) {
+        while (!stopped && running.size < read(options.maxConcurrentRuns)) {
           const busy = [...running.values()].map((entry) => entry.domain);
           const run = await queue.claimNext(busy);
           if (!run) break;

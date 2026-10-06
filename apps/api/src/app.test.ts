@@ -586,6 +586,145 @@ describe("recording and login windows", () => {
   });
 });
 
+describe("support for the web UI", () => {
+  it("tries one step, reads back versions, and exports jobs", async () => {
+    const id = await createBoard();
+    const worked = await api("POST", `/api/recordings/${id}/test-step`, { stepId: "s3" });
+    expect(worked.status).toBe(200);
+    expect(worked.body).toMatchObject({
+      ok: true,
+      reached: true,
+      fields: { title: changingJobs(1)[0]?.title, salaryText: changingJobs(1)[0]?.salary },
+      events: [],
+    });
+    // Nothing is stored by a test.
+    expect((await api("GET", "/api/runs")).body).toEqual([]);
+    expect((await api("GET", "/api/jobs")).body.total).toBe(0);
+    expect((await api("POST", `/api/recordings/${id}/test-step`, { stepId: "nope" })).status).toBe(
+      404,
+    );
+
+    const broken = {
+      ...board(),
+      steps: [
+        ...board().steps,
+        { id: "s9", type: "click", target: { locators: [{ kind: "css", value: "#missing" }] } },
+      ],
+    };
+    await api("PUT", `/api/recordings/${id}`, broken);
+    const failed = await api("POST", `/api/recordings/${id}/test-step`, { stepId: "s9" });
+    expect(failed.body).toMatchObject({
+      ok: false,
+      reached: true,
+      error: { code: "LOCATOR_NOT_FOUND", stepId: "s9" },
+    });
+
+    const versions = (await api("GET", `/api/recordings/${id}/versions`)).body;
+    const original = await api("GET", `/api/recordings/${id}/versions/${versions.at(-1).id}`);
+    expect(original.body.steps).toHaveLength(2);
+    expect((await api("GET", `/api/recordings/${id}/versions/rcv_nope`)).status).toBe(404);
+    // Restoring is putting an old version back.
+    expect(
+      (await api("PUT", `/api/recordings/${id}`, original.body)).body.definition.steps,
+    ).toHaveLength(2);
+
+    await runToEnd(id);
+    const csv = await api("GET", "/api/jobs/export?q=engineer");
+    expect(csv.headers["content-type"]).toBe("text/csv; charset=utf-8");
+    expect(csv.headers["content-disposition"]).toBe('attachment; filename="jobtrace-jobs.csv"');
+    const lines = csv.text.trim().split("\r\n");
+    expect(lines[0]).toBe(
+      "title,company,location,remote,salaryText,salaryMin,salaryMax,salaryCurrency,salaryPeriod,employmentType,postedAt,url,firstSeenAt,lastSeenAt,closedAt,recordingId",
+    );
+    expect(lines).toHaveLength(
+      1 + changingJobs(1).filter((job) => /engineer/i.test(job.title)).length,
+    );
+    expect(csv.text).toContain('"€85,000 - €110,000 per year",85000,110000,EUR,year');
+    const json = await api("GET", "/api/jobs/export?format=json&remote=remote");
+    expect(json.headers["content-disposition"]).toContain("jobtrace-jobs.json");
+    expect(json.body).toEqual([]);
+    expect((await api("GET", "/api/jobs?remote=sometimes")).status).toBe(400);
+  });
+
+  it("guards exported cells against being run as spreadsheet formulas", async () => {
+    const { csvCell } = await import("./routes/jobs.ts");
+    expect(csvCell('=HYPERLINK("http://evil.example","Apply")')).toBe(
+      `"'=HYPERLINK(""http://evil.example"",""Apply"")"`,
+    );
+    expect(csvCell("+1 555 0100")).toBe("'+1 555 0100");
+    expect(csvCell("-10% equity")).toBe("'-10% equity");
+    expect(csvCell("@handle")).toBe("'@handle");
+    expect(csvCell("Engineer, Platform")).toBe('"Engineer, Platform"');
+    expect(csvCell("line one\nline two")).toBe('"line one\nline two"');
+    expect([csvCell(null), csvCell(undefined), csvCell(85000), csvCell("plain")]).toEqual([
+      "",
+      "",
+      "85000",
+      "plain",
+    ]);
+  });
+
+  it("reads and changes settings, which take effect at once and survive a restart", async () => {
+    const initial = (await api("GET", "/api/settings")).body;
+    expect(initial).toMatchObject({
+      maxConcurrentRuns: 2,
+      artifactRetentionRuns: 20,
+      defaultMinDelayMs: 1000,
+      defaultMaxDelayMs: 3000,
+      aiFallbackEnabled: false,
+      aiFallbackKeyConfigured: false,
+      dataDir,
+      local: true,
+    });
+    const changed = await api("PUT", "/api/settings", {
+      maxConcurrentRuns: 1,
+      defaultMinDelayMs: 0,
+      defaultMaxDelayMs: 0,
+    });
+    expect(changed.body).toMatchObject({
+      maxConcurrentRuns: 1,
+      artifactRetentionRuns: 20,
+      defaultMaxDelayMs: 0,
+    });
+    expect((await api("PUT", "/api/settings", { maxConcurrentRuns: 0 })).status).toBe(400);
+    expect(
+      (await api("PUT", "/api/settings", { defaultMinDelayMs: 500 })).body.error.message,
+    ).toMatch(/must not exceed/);
+
+    // With one slot, two runs on different hosts no longer overlap.
+    const here = await createBoard(SITES.changing, [{ id: "wait", type: "waitFor", ms: 300 }]);
+    const there = (
+      await api("POST", "/api/recordings", {
+        ...board(SITES.changing, [{ id: "wait", type: "waitFor", ms: 300 }], "Elsewhere"),
+        startUrl: sites.url(SITES.changing).replace("127.0.0.1", "localhost"),
+      })
+    ).body.id;
+    await api("POST", `/api/recordings/${here}/runs`, {});
+    await api("POST", `/api/recordings/${there}/runs`, {});
+    await expect.poll(() => server.worker.active().length).toBe(1);
+    expect((await api("GET", "/api/health")).body).toMatchObject({ activeRuns: 1, queuedRuns: 1 });
+    await server.worker.idle();
+
+    await server.close();
+    await start();
+    expect((await api("GET", "/api/settings")).body).toMatchObject({
+      maxConcurrentRuns: 1,
+      defaultMaxDelayMs: 0,
+    });
+  });
+
+  it("serves the UI's page for browser paths, and JSON errors for API paths", async () => {
+    await server.close();
+    await start();
+    const page = await server.app.inject({ url: "/recordings/rec_123" });
+    expect(page.statusCode).toBe(200);
+    expect(page.headers["content-type"]).toContain("text/html");
+    expect((await api("GET", "/api/nope")).body.error.code).toBe("NOT_FOUND");
+    expect((await api("POST", "/recordings")).status).toBe(404);
+    expect((await api("GET", "/assets/missing.js")).status).toBe(404);
+  });
+});
+
 describe("security and documentation", () => {
   it("only answers requests addressed to localhost, and refuses cross-site requests", async () => {
     expect((await api("GET", "/api/health")).status).toBe(200);

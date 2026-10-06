@@ -9,6 +9,7 @@ import {
   type NormalizedJob,
   newId,
   parseApiSource,
+  parseDefinition,
   parseRecording,
   type RunEvent,
   type RunStatus,
@@ -212,6 +213,7 @@ export function openDatabase(url: string): Database {
     const conditions: SQL[] = [];
     if (filter.recordingId) conditions.push(eq(jobs.recordingId, filter.recordingId));
     if (!filter.includeClosed) conditions.push(isNull(jobs.closedAt));
+    if (filter.remote) conditions.push(eq(jobs.remote, filter.remote));
     if (filter.since) conditions.push(sql`${jobs.firstSeenAt} >= ${filter.since}`);
     if (filter.until) conditions.push(sql`${jobs.firstSeenAt} < ${filter.until}`);
     if (filter.search?.trim()) {
@@ -338,6 +340,19 @@ export function openDatabase(url: string): Database {
           .where(eq(recordingVersions.recordingId, id))
           .orderBy(desc(sql`rowid`))
           .all();
+      },
+      async version(recordingId, versionId) {
+        const row = db
+          .select({ definitionJson: recordingVersions.definitionJson })
+          .from(recordingVersions)
+          .where(
+            and(
+              eq(recordingVersions.id, versionId),
+              eq(recordingVersions.recordingId, recordingId),
+            ),
+          )
+          .get();
+        return row ? parseDefinition(JSON.parse(row.definitionJson)) : null;
       },
       async delete(id) {
         return db.transaction((tx) => {
@@ -678,6 +693,20 @@ export function openDatabase(url: string): Database {
       },
       async delete(id) {
         db.delete(authProfiles).where(eq(authProfiles.id, id)).run();
+      },
+    },
+
+    settings: {
+      async get<T>(key: string) {
+        const row = db.select().from(schema.settings).where(eq(schema.settings.key, key)).get();
+        return row ? (JSON.parse(row.valueJson) as T) : null;
+      },
+      async set(key, value) {
+        const valueJson = JSON.stringify(value);
+        db.insert(schema.settings)
+          .values({ key, valueJson })
+          .onConflictDoUpdate({ target: schema.settings.key, set: { valueJson } })
+          .run();
       },
     },
 

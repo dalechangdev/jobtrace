@@ -1,5 +1,6 @@
-import { jobSchema, RUN_STATUSES } from "@jobtrace/core";
+import { jobSchema, REMOTE_VALUES, RUN_STATUSES } from "@jobtrace/core";
 import { z } from "zod";
+import { runtimeSettingsSchema } from "./runtime.ts";
 
 /**
  * Request and response shapes of the HTTP API. They validate input, shape
@@ -166,9 +167,27 @@ export const jobsQuerySchema = z.object({
   to: z.iso.datetime({ offset: true }).optional(),
   /** Include jobs that have disappeared from the site. */
   closed: flag,
+  remote: z.enum(REMOTE_VALUES).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
 });
 
 export const pageOf = <T extends z.ZodType>(item: T) =>
   z.object({ items: z.array(item), total: z.number(), page: z.number(), pageSize: z.number() });
+
+export const testStepResultSchema = z.object({
+  ok: z.boolean(),
+  reached: z.boolean(),
+  error: runSchema.shape.error.unwrap().optional(),
+  fields: z.record(z.string(), z.string().nullable()).optional(),
+  events: z.array(eventSchema),
+  durationMs: z.number(),
+});
+
+export const settingsViewSchema = runtimeSettingsSchema.extend({
+  /** Whether ANTHROPIC_API_KEY is set in the server's environment. Never the key itself. */
+  aiFallbackKeyConfigured: z.boolean(),
+  dataDir: z.string(),
+  /** False when the server is reachable from other machines (windows cannot be opened then). */
+  local: z.boolean(),
+});

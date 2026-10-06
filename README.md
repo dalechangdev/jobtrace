@@ -7,7 +7,7 @@ source.
 > **Status: early.** You can record a job board with `jobtrace record`, replay it
 > with `jobtrace run`, and browse what it found, including which jobs are new or
 > changed since the last run (milestones M0–M4 of [PLAN.md](PLAN.md)). It is all
-> command-line and an HTTP API for now: the web UI and scheduler are not built yet.
+> by command line, HTTP API or web UI. Scheduled runs are not built yet.
 
 ## Quickstart
 
@@ -110,8 +110,30 @@ location when there is no URL.
 jobtrace serve [--port 4317] [--host 127.0.0.1]
 ```
 
-Starts the HTTP API and a worker in one process. Interactive documentation of every
-route is at `http://127.0.0.1:4317/api/docs`. A few to get started:
+Starts the web UI, the HTTP API and a worker in one process.
+
+### Web UI
+
+```sh
+pnpm build:web          # once, and again after updating JobTrace
+pnpm jobtrace serve     # then open http://127.0.0.1:4317
+```
+
+- **Dashboard**: jobs found since you last looked, and recent runs.
+- **Recordings**: record a new board (a recorder window opens on this computer), add a
+  Greenhouse, Lever or Ashby feed, or import a file. A recording's page lets you rename
+  it, change field names and how fields are read, reorder or remove locators, adjust
+  limits and delays, try a single step, restore an earlier version, and run it.
+- **Runs**: each run's live log, per-step summary, screenshots, and its jobs with
+  **New** and **Changed** badges.
+- **Jobs**: search and filter everything found so far, open a job's details, export
+  the result as CSV or JSON.
+- **Saved logins** and **Settings**.
+
+### HTTP API
+
+Interactive documentation of every route is at `http://127.0.0.1:4317/api/docs`. A few
+to get started:
 
 ```sh
 curl http://127.0.0.1:4317/api/recordings
@@ -265,6 +287,10 @@ Respect each site's terms of use and keep request volumes low. See
 - **`robots_disallowed`**: the site's robots.txt does not allow automated visits to
   that page. See "Responsible use" above.
 - **`auth_expired`**: the saved login no longer works. Run `jobtrace auth refresh`.
+- **Jobs show up as new after editing a recording**: jobs are matched across runs by
+  their URL. A recording that does not extract a `url` matches jobs by title, company
+  and location instead, so changing any of those makes the same job look new (and the
+  old entry eventually closed). Mark the job's link as `url` to avoid this.
 - **A run is slow**: recordings wait `minDelayMs`–`maxDelayMs` between actions on
   purpose. Optional fields that are missing also cost a short wait each.
 

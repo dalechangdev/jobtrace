@@ -518,6 +518,17 @@ jobtrace db migrate
 - **Settings**: concurrency, delays, retention, AI fallback toggle (key stays in env, never stored in DB).
 - Vite dev server proxies `/api` to the API. In production, the API serves the built UI as static files.
 
+### Decisions made while building M7
+- **UI components are written by hand in the shadcn/ui style** (small Tailwind-styled primitives in `apps/web/src/ui.tsx`), without the shadcn CLI or Radix. Dialogs use the native `<dialog>` element, which provides focus trapping and Escape handling.
+- **End-to-end tests run on Vitest with the Playwright library**, like every other browser test here, through `pnpm test:e2e` (which builds the UI first). They start a real server and drive the built UI.
+- **"Test step"** replays the saved recording up to and including that step, once, in a headless browser, and reports whether it worked and what an extract step read. Nothing is stored. It is disabled while there are unsaved edits, because it tests the saved version.
+- **Settings changed in the UI are stored in the database and override the environment.** Concurrency and retention take effect at once; the default delays are given to recordings made through the UI.
+- **Editing in the UI** covers names, field names and how fields are read, locator order and removal, step values, params and settings; anything else through "Edit as JSON". Adding new steps or locators means recording again.
+- **"New jobs since last visit"** on the dashboard is tracked in the browser (local storage), not on the server.
+- **Job export** is done by the server (`GET /api/jobs/export`), with cells that would be read as spreadsheet formulas neutralized.
+- When the server requires an API token, the UI asks for it once and keeps it in the browser's local storage.
+- Not in this milestone: upcoming scheduled runs and the Schedules page (M8), accepting AI locator suggestions (M10).
+
 ---
 
 ## 15. Milestones

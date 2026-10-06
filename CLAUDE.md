@@ -15,8 +15,8 @@ silently diverging. Record agreed changes in `PLAN.md` itself.
 - [x] M4b — ATS API sources (Greenhouse, Lever, Ashby)
 - [x] M5 — Auth profiles and politeness
 - [x] M6 — API and worker
-- [ ] M7 — Web UI  ← next
-- [ ] M8 — Scheduler
+- [x] M7 — Web UI
+- [ ] M8 — Scheduler  ← next
 - [ ] M9 — Packaging and docs
 - [ ] M10 — AI fallback plugin
 
@@ -36,7 +36,9 @@ A milestone is done when its acceptance criteria in `PLAN.md` pass, along with
 - `pnpm db:migrate` — create or upgrade the database (also happens on first use)
 - `pnpm --filter @jobtrace/db generate` — generate a SQL migration after editing `packages/db/src/schema.ts`
 
-Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`.
+- `pnpm build:web` — build the web UI into `apps/web/dist`, which `jobtrace serve` serves
+- `pnpm test:e2e` — build the UI, then drive it in a browser against a real server
+- `pnpm dev:web` — the UI with hot reload on :5173, proxying `/api` to a running `jobtrace serve`; `pnpm dev` starts both
 
 ## Layout
 
@@ -61,6 +63,10 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`.
 - `apps/api` — the HTTP API (Fastify with Zod schemas and OpenAPI). `buildApp(deps)`
   assembles routes; `startServer(options)` adds the worker and listens, and is what
   `jobtrace serve` calls. Routes are in `src/routes`, shapes in `src/schemas.ts`.
+- `apps/web` — the React UI (Vite, TanStack Query, React Router, Tailwind). Pages in
+  `src/pages`, shared pieces in `src/components`, primitives in `src/ui.tsx`, the API
+  client in `src/api.ts`, pure helpers (with unit tests) in `src/lib`. End-to-end tests
+  in `e2e/`.
 - `apps/cli` — the `jobtrace` binary
 - `examples/recordings` — hand-written recordings for the mock sites, also used by tests
 
@@ -105,6 +111,11 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`.
   let the error handler map it (`NOT_FOUND` 404, `INVALID_*` 400).
 - The API must stay safe on localhost: keep the Host and Origin checks in
   `api/src/security.ts`, and never serve captured page HTML as HTML.
+- The web UI talks to the server only through `apps/web/src/api.ts`, typed with the
+  `Api*` types exported by `@jobtrace/api`; it imports nothing but types from other
+  workspace packages. Editing logic belongs in `src/lib` as pure functions with tests.
+- UI text is plain language for a job seeker, not internals: say what happened and what
+  to do. Every form control has a visible label; dialogs use the `Dialog` primitive.
 - CLI commands live in `apps/cli/src/commands`, get a `CliContext`, print results on
   stdout and messages on stderr, and take `--json` where they list things.
 - A row in `recordings` is either a browser recording or an API source (`kind`);

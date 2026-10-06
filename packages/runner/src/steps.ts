@@ -52,6 +52,13 @@ export async function runSteps(
     emit(state, "debug", "step_start", `${step.type} ${step.id}`, { stepId: step.id });
     try {
       await runStep(state, scope, step);
+      if (state.options.stopAfterStepId === step.id) {
+        emit(state, "info", "step_result", `Step ${step.id} ran`, {
+          stepId: step.id,
+          data: step.type === "extract" ? { fields: { ...scope.record.fields } } : {},
+        });
+        throw new StopRun(`step ${step.id}`);
+      }
     } catch (thrown) {
       if (thrown instanceof StopRun) throw thrown;
       // An abort closes the browser context; report the abort, not the resulting noise.

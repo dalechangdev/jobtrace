@@ -61,7 +61,10 @@ const note = (
 ): RunEvent => ({ ts: new Date().toISOString(), level, type, message, ...(data ? { data } : {}) });
 
 /** The storage-state file of a recording's auth profile, or AUTH_EXPIRED when it is gone. */
-async function savedLogin(db: Database, authProfileId: string | null): Promise<string | null> {
+export async function savedLogin(
+  db: Database,
+  authProfileId: string | null,
+): Promise<string | null> {
   if (!authProfileId) return null;
   const profile = await db.authProfiles.get(authProfileId);
   if (!profile || !existsSync(profile.storageStatePath)) {

@@ -12,6 +12,7 @@ import {
 import type { FastifyServerOptions } from "fastify";
 import { buildApp } from "./app.ts";
 import type { App, AppDeps } from "./deps.ts";
+import { loadRuntime } from "./runtime.ts";
 
 export interface ServerOptions {
   config: Config;
@@ -27,6 +28,7 @@ export interface ServerOptions {
   listenHost?: string;
   worker?: Pick<WorkerOptions, "pollIntervalMs" | "run" | "source">;
   sessionHooks?: AppDeps["sessionHooks"];
+  webRoot?: AppDeps["webRoot"];
 }
 
 export interface RunningServer {
@@ -48,6 +50,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
   const db = options.db ?? openDatabase(config.databaseUrl);
   const politeness = createPoliteness({ cacheDir: join(config.dataDir, "cache", "robots") });
   const hub = createRunHub();
+  const runtime = await loadRuntime(db, config);
   let worker: Worker | undefined;
   const queue = createDbQueue(db, { onEnqueue: () => worker?.wake() });
   worker = createWorker({
@@ -56,8 +59,8 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     hub,
     politeness,
     dataDir: config.dataDir,
-    artifactRetentionRuns: config.artifactRetentionRuns,
-    maxConcurrentRuns: config.maxConcurrentRuns,
+    artifactRetentionRuns: () => runtime.current.artifactRetentionRuns,
+    maxConcurrentRuns: () => runtime.current.maxConcurrentRuns,
     ...options.worker,
     onError: (error, run) => app.log.error({ err: error, runId: run.id }, "run crashed"),
   });
@@ -69,6 +72,9 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       worker,
       hub,
       politeness,
+      runtime,
+      ...(options.webRoot === undefined ? {} : { webRoot: options.webRoot }),
+      ...(options.worker?.run ? { testRun: options.worker.run } : {}),
       ...(options.sessionHooks ? { sessionHooks: options.sessionHooks } : {}),
     },
     { logger: options.logger ?? false },

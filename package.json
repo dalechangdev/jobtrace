@@ -16,7 +16,11 @@
     "test:watch": "vitest",
     "test-sites": "pnpm --filter @jobtrace/test-sites start",
     "jobtrace": "node apps/cli/bin/jobtrace.js",
-    "db:migrate": "node apps/cli/bin/jobtrace.js db migrate"
+    "db:migrate": "node apps/cli/bin/jobtrace.js db migrate",
+    "dev:web": "pnpm --filter @jobtrace/web dev",
+    "build:web": "pnpm --filter @jobtrace/web build",
+    "dev": "node apps/cli/bin/jobtrace.js serve & pnpm --filter @jobtrace/web dev",
+    "test:e2e": "pnpm build:web && vitest run --config vitest.e2e.config.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

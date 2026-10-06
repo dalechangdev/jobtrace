@@ -7,7 +7,14 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!**/__golden__", "!**/dist", "!**/coverage", "!**/migrations"]
+    "includes": [
+      "**",
+      "!**/__golden__",
+      "!**/dist",
+      "!**/coverage",
+      "!**/migrations",
+      "!**/e2e-artifacts"
+    ]
   },
   "formatter": {
     "enabled": true,
@@ -18,7 +25,15 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended"
+      "preset": "recommended",
+      "a11y": {
+        "noLabelWithoutControl": {
+          "level": "error",
+          "options": {
+            "inputComponents": ["Input", "Select"]
+          }
+        }
+      }
     }
   },
   "javascript": {
@@ -32,6 +47,11 @@
       "source": {
         "organizeImports": "on"
       }
+    }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
     }
   }
 }

@@ -8,7 +8,7 @@ import {
   parseDefinition,
 } from "@jobtrace/core";
 import { definitionOf, type StoredRecording } from "@jobtrace/db";
-import { removeRunArtifacts } from "@jobtrace/scheduler";
+import { removeRunArtifacts, testStep } from "@jobtrace/scheduler";
 import { fetchSource } from "@jobtrace/sources";
 import { z } from "zod";
 import type { App, RouteContext } from "../deps.ts";
@@ -20,6 +20,7 @@ import {
   recordingListItemSchema,
   runSchema,
   sessionSchema,
+  testStepResultSchema,
   versionSchema,
 } from "../schemas.ts";
 
@@ -168,6 +169,42 @@ export function recordingRoutes(app: App, ctx: RouteContext): void {
       },
     },
     async (request) => db.recordings.versions((await found(request.params.id)).id),
+  );
+
+  app.get(
+    "/api/recordings/:id/versions/:versionId",
+    {
+      schema: {
+        tags,
+        summary: "The definition as saved in one version (PUT it back to restore)",
+        params: z.object({ id: z.string().min(1), versionId: z.string().min(1) }),
+        response: { 200: definitionSchema, 404: errorSchema },
+      },
+    },
+    async (request) => {
+      const definition = await db.recordings.version(request.params.id, request.params.versionId);
+      if (!definition) throw new JobTraceError("NOT_FOUND", "No such version");
+      return definition as Record<string, unknown>;
+    },
+  );
+
+  app.post(
+    "/api/recordings/:id/test-step",
+    {
+      schema: {
+        tags,
+        summary: "Try one step: replay the saved recording up to that step, once",
+        description: "Runs in a headless browser and waits for the result. Nothing is stored.",
+        params: idParams,
+        body: z.object({ stepId: z.string().min(1) }),
+        response: { 200: testStepResultSchema, 400: errorSchema, 404: errorSchema },
+      },
+    },
+    async (request) =>
+      testStep(db, request.params.id, request.body.stepId, {
+        ...(ctx.politeness ? { politeness: ctx.politeness } : {}),
+        run: { runTimeoutMs: 120_000, ...ctx.testRun },
+      }),
   );
 
   app.post(

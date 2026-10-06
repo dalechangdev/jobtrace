@@ -9,6 +9,7 @@ import {
   startRecording,
 } from "@jobtrace/recorder";
 import type { z } from "zod";
+import type { Runtime } from "./runtime.ts";
 import type { sessionSchema } from "./schemas.ts";
 
 export type SessionView = z.infer<typeof sessionSchema>;
@@ -31,7 +32,12 @@ interface Entry {
  * or capturing a login. One at a time, and only when the server is bound to
  * loopback, since the window appears on the host's screen.
  */
-export function createSessions(db: Database, config: Config, hooks: SessionHooks = {}) {
+export function createSessions(
+  db: Database,
+  config: Config,
+  runtime: Runtime,
+  hooks: SessionHooks = {},
+) {
   const entries = new Map<string, Entry>();
 
   function begin(kind: SessionView["kind"], url: string): Entry {
@@ -94,6 +100,9 @@ export function createSessions(db: Database, config: Config, hooks: SessionHooks
         entry.recording = session;
         session.finished
           .then(async ({ recording, warnings }) => {
+            // New recordings start with the pause between actions set on the Settings page.
+            recording.settings.minDelayMs = runtime.current.defaultMinDelayMs;
+            recording.settings.maxDelayMs = runtime.current.defaultMaxDelayMs;
             await db.recordings.save(recording, "recorded");
             settle(entry, { status: "finished", resultId: recording.id, warnings });
           })

@@ -5,6 +5,8 @@ export default defineConfig({
     include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts"],
     testTimeout: 30_000,
     hookTimeout: 60_000,
+    // Browser-driven waits need more than the one-second default on a busy machine.
+    expect: { poll: { timeout: 5000 } },
     coverage: {
       provider: "v8",
       include: ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"],

@@ -15,8 +15,10 @@ import { authRoutes } from "./routes/auth.ts";
 import { jobRoutes } from "./routes/jobs.ts";
 import { recordingRoutes } from "./routes/recordings.ts";
 import { runRoutes } from "./routes/runs.ts";
+import { settingsRoutes } from "./routes/settings.ts";
 import { registerSecurity } from "./security.ts";
 import { createSessions, type Sessions } from "./sessions.ts";
+import { DEFAULT_WEB_ROOT, registerWebUi } from "./static.ts";
 
 const STATUS_BY_CODE: Partial<Record<ErrorCode, number>> = {
   NOT_FOUND: 404,
@@ -72,9 +74,6 @@ export async function buildApp(
       },
     });
   });
-  app.setNotFoundHandler((_request, reply) =>
-    reply.code(404).send({ error: { code: "NOT_FOUND", message: "No such route" } }),
-  );
 
   await app.register(swagger, {
     openapi: {
@@ -95,7 +94,7 @@ export async function buildApp(
   });
   await app.register(swaggerUi, { routePrefix: "/api/docs" });
 
-  const sessions = createSessions(deps.db, deps.config, deps.sessionHooks);
+  const sessions = createSessions(deps.db, deps.config, deps.runtime, deps.sessionHooks);
   const ctx = { ...deps, sessions };
 
   app.get(
@@ -123,6 +122,8 @@ export async function buildApp(
   runRoutes(app, ctx);
   jobRoutes(app, ctx);
   authRoutes(app, ctx);
+  settingsRoutes(app, ctx);
+  await registerWebUi(app, deps.webRoot ?? DEFAULT_WEB_ROOT);
 
   await app.ready();
   return { app, sessions };
