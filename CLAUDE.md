@@ -12,8 +12,8 @@ silently diverging. Record agreed changes in `PLAN.md` itself.
 - [x] M2 — Recorder: basic actions
 - [x] M3 — Recorder: lists, detail pages, pagination
 - [x] M4 — Persistence
-- [ ] M4b — ATS API sources (Greenhouse, Lever, Ashby)  ← next
-- [ ] M5 — Auth profiles and politeness
+- [x] M4b — ATS API sources (Greenhouse, Lever, Ashby)
+- [ ] M5 — Auth profiles and politeness  ← next
 - [ ] M6 — API and worker
 - [ ] M7 — Web UI
 - [ ] M8 — Scheduler
@@ -48,7 +48,10 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`.
   bundled with esbuild at session start; `postprocess.ts` turns the raw capture into steps.
 - `packages/db` — Drizzle schema, SQL migrations (`migrations/`), and the `Database`
   interface with its SQLite implementation. `openDatabase(url)` migrates on open.
-- `packages/scheduler` — `executeRun(db, recordingId, options)`: replay plus persistence
+- `packages/sources` — API sources: adapters mapping the Greenhouse, Lever and Ashby
+  feeds to raw job records, and `fetchSource(source, options)`, which returns the same
+  `RunResult` as a browser replay. No browser dependency.
+- `packages/scheduler` — `executeRun(db, recordingId, options)`: replay or feed fetch, plus persistence
   (run, events, jobs with new/changed flags, artifacts, closing, retention). The worker
   and cron scheduling will be added here.
 - `packages/test-sites` — mock career sites; `src/data.ts` is the ground truth tests compare against
@@ -92,6 +95,11 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`.
   migration (`drizzle-kit generate --custom`).
 - CLI commands live in `apps/cli/src/commands`, get a `CliContext`, print results on
   stdout and messages on stderr, and take `--json` where they list things.
+- A row in `recordings` is either a browser recording or an API source (`kind`);
+  `StoredRecording` is a union, so check `stored.kind` before using `.recording` or
+  `.source`. Anything that should work for both takes a `Definition`.
+- Feed payloads are external input: adapters validate them with lenient Zod schemas
+  (unknown fields ignored, absent ones tolerated) and skip unreadable entries.
 - Tests never use real websites. Use the mock sites with `fastOptions()` from
   `packages/runner/src/testing.ts` (no delays, short waits, fixed clock).
 - No CAPTCHA solving, stealth plugins or fingerprint spoofing, ever.

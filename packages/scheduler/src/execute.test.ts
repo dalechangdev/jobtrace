@@ -1,9 +1,15 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseRecording, type Recording, type RecordingInput } from "@jobtrace/core";
+import {
+  parseApiSource,
+  parseRecording,
+  type Recording,
+  type RecordingInput,
+} from "@jobtrace/core";
 import { type Database, openDatabase } from "@jobtrace/db";
 import {
+  ATS_PATHS,
   CHANGED_SALARY,
   changingJobs,
   type RunningTestSites,
@@ -217,6 +223,75 @@ describe("executeRun", () => {
     expect(await db.artifacts.forRun(middle?.run.id ?? "")).toHaveLength(3);
     // The run itself and its log are kept; only the files go.
     expect((await db.runs.events(oldest?.run.id ?? "")).length).toBeGreaterThan(0);
+  });
+
+  it.each(["greenhouse", "lever", "ashby"] as const)(
+    "%s feed: flags the added and the modified job on the second run, without a browser",
+    async (provider) => {
+      const id = `src_${provider}`;
+      await db.recordings.save(
+        parseApiSource({
+          schemaVersion: 1,
+          kind: "api",
+          id,
+          name: `Acme on ${provider}`,
+          provider,
+          boardToken: "acme",
+          baseUrl: sites.url(ATS_PATHS[provider]),
+        }),
+      );
+      // No browser is passed: a feed run must not need one.
+      const run = () => executeRun(db, id, { trigger: "cli", dataDir, artifactRetentionRuns: 20 });
+
+      const one = await run();
+      expect(one.run).toMatchObject({
+        status: "succeeded",
+        stats: { jobs: 5, newJobs: 5, changedJobs: 0 },
+      });
+      await setVersion(2);
+      const two = await run();
+      expect(two.run.stats).toMatchObject({ jobs: 5, newJobs: 1, changedJobs: 1, closedJobs: 0 });
+      const [, second] = changingJobs(1).map((job) => job.title);
+      expect(flagged(two.jobs)).toMatchObject({
+        [second as string]: "changed",
+        [changingJobs(2).at(-1)?.title ?? ""]: "new",
+      });
+      expect(Object.values(flagged(two.jobs)).filter((flag) => flag === "same")).toHaveLength(3);
+      expect(two.artifacts).toEqual([]);
+      expect((await db.runs.events(two.run.id)).map((event) => event.type)).toEqual(
+        expect.arrayContaining([
+          "run_started",
+          "request",
+          "feed_read",
+          "run_finished",
+          "jobs_saved",
+        ]),
+      );
+
+      // Two more successful runs without the fifth job: it is closed.
+      await run();
+      expect((await run()).run.stats?.closedJobs).toBe(1);
+    },
+  );
+
+  it("stores a blocked feed run as blocked", async () => {
+    await db.recordings.save(
+      parseApiSource({
+        schemaVersion: 1,
+        kind: "api",
+        id: "src_blocked",
+        name: "Blocked",
+        provider: "lever",
+        boardToken: "forbidden",
+        baseUrl: sites.url(ATS_PATHS.lever),
+      }),
+    );
+    const { run } = await executeRun(db, "src_blocked", {
+      trigger: "cli",
+      dataDir,
+      artifactRetentionRuns: 20,
+    });
+    expect(run).toMatchObject({ status: "blocked", reason: "bot_wall", stats: { jobs: 0 } });
   });
 
   it("executes a run that was queued earlier", async () => {

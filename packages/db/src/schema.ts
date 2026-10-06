@@ -25,6 +25,8 @@ export const authProfiles = sqliteTable("auth_profiles", {
 
 export const recordings = sqliteTable("recordings", {
   id: text("id").primaryKey(),
+  /** browser: a recording replayed in a browser. api: an ATS feed read directly. */
+  kind: text("kind").notNull().default("browser"),
   name: text("name").notNull(),
   startUrl: text("start_url").notNull(),
   domain: text("domain").notNull(),

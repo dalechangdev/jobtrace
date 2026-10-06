@@ -1,4 +1,5 @@
 export { parseDate } from "./date.ts";
+export { decodeEntities, htmlToText } from "./html.ts";
 export {
   computeContentHash,
   computeDedupKey,

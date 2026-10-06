@@ -14,3 +14,4 @@ export type {
   StoredRecording,
   StoredRunStats,
 } from "./types.ts";
+export { definitionOf } from "./types.ts";

@@ -544,7 +544,12 @@ Order rationale: the recording format and a replay engine come first, so the rec
 ### M4b — ATS API sources
 - A source adapter interface (`fetchJobs(config) → RawJobRecord[]`) with adapters for the public Greenhouse, Lever, and Ashby job-board feeds. No browser involved.
 - Raw records go through the same `extractor` normalization, dedup, and change detection as recorded runs, and produce ordinary `runs` / `run_jobs` rows.
-- Design the storage shape at the start of this milestone (a `kind` on the recording row vs. a separate `sources` table) and record the decision here before coding.
+- **Storage decision (made at the start of M4b): a `kind` column on the `recordings` row** (`browser` or `api`), not a separate `sources` table. Runs, jobs, schedules and dedup scope all hang off `recording_id`; a second parent table would need a second nullable foreign key on each of them and two code paths in every query. An API source is therefore stored as a row in `recordings` whose `definition_json` holds an **API source definition** (`{ schemaVersion, kind: "api", id, name, provider, boardToken, baseUrl?, settings }`) instead of a recording. The recording format itself (Section 5) is unchanged. Ids of API sources use the `src_` prefix. In the CLI and UI both kinds appear in the same list.
+- The adapters live in a new `packages/sources`; `executeRun` picks the browser replay or the feed fetch by `kind`, and everything after that (normalization, flags, closing, retention) is shared.
+- Fixture feeds are synthetic (the usual fixture jobs) but follow the field names and nesting of the live responses of each API, which were checked while building this milestone; the adapters were also run once against real payloads.
+- An entry the adapter cannot read is skipped and counted as an item error (run `partial`); a response with an unexpected top-level shape fails the run with a message that the API may have changed. An unknown board is `failed` with reason `not_found`.
+- `jobtrace source add` reads the feed once before storing anything, so a mistyped board name is caught immediately (`--no-check` skips this).
+- Politeness in this milestone: one request per run with an honest `User-Agent`, `Retry-After` honored on 429/503 (bounded), and 403/429 ending the run as `blocked`. robots.txt and the per-domain lock are wired in with the `politeness` package in M5.
 - Politeness still applies: robots.txt, per-domain lock, delays, `Retry-After`.
 - CLI: `jobtrace source add <greenhouse|lever|ashby> <boardToken> [--name]`; `jobtrace run` works on a source id.
 - **Accept**: adapters tested against recorded fixture responses served by `test-sites`; two consecutive runs with 1 added and 1 modified job produce correct `is_new` / `is_changed` flags.

@@ -2,14 +2,17 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
+  isApiSource,
   isJobTraceError,
   JobTraceError,
   newId,
-  parseRecordingJson,
+  parseDefinitionJson,
+  type RunEvent,
   type RunStatus,
 } from "@jobtrace/core";
 import { runRecording } from "@jobtrace/runner";
 import { executeRun } from "@jobtrace/scheduler";
+import { fetchSource } from "@jobtrace/sources";
 import type { CliContext } from "./context.ts";
 
 export interface RunCommandOptions {
@@ -73,15 +76,17 @@ export async function runCommand(
         cause: error,
       });
     }
-    const recording = parseRecordingJson(text);
-
+    const definition = parseDefinitionJson(text);
+    const onEvent = (event: RunEvent) => ctx.logger.event(event);
     const result = await ctx.withInterrupt((signal) =>
-      runRecording(recording, {
-        ...shared,
-        signal,
-        artifactsDir: options.artifacts ?? join(ctx.config.dataDir, "artifacts", newId("run")),
-        onEvent: (event) => ctx.logger.event(event),
-      }),
+      isApiSource(definition)
+        ? fetchSource(definition, { signal, onEvent })
+        : runRecording(definition, {
+            ...shared,
+            signal,
+            artifactsDir: options.artifacts ?? join(ctx.config.dataDir, "artifacts", newId("run")),
+            onEvent,
+          }),
     );
     const { status, reason, error, stats, artifacts, jobs } = result;
     print(options.summary ? { status, reason, error, stats, artifacts, jobs } : jobs);

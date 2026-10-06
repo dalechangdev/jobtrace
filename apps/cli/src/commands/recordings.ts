@@ -1,7 +1,14 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { JobTraceError, parseRecordingJson, walkSteps } from "@jobtrace/core";
+import {
+  apiSourceFeedUrl,
+  isApiSource,
+  JobTraceError,
+  parseDefinitionJson,
+  walkSteps,
+} from "@jobtrace/core";
+import { definitionOf } from "@jobtrace/db";
 import { removeRunArtifacts } from "@jobtrace/scheduler";
 import type { Command } from "commander";
 import type { CliContext } from "../context.ts";
@@ -28,9 +35,10 @@ export function registerRecordings(program: Command, ctx: CliContext): void {
       }
       ctx.stdout.write(
         table(
-          ["ID", "NAME", "SITE", "OPEN JOBS", "LAST RUN"],
+          ["ID", "TYPE", "NAME", "SITE", "OPEN JOBS", "LAST RUN"],
           rows.map((row) => [
             row.id,
+            row.kind === "api" ? "feed" : "recording",
             row.name,
             row.domain,
             row.openJobs,
@@ -49,20 +57,36 @@ export function registerRecordings(program: Command, ctx: CliContext): void {
     .option("--json", "print the recording definition as JSON")
     .action(async (ref: string, options: { json?: boolean }) => {
       const stored = await ctx.db.recordings.resolve(ref);
-      if (options.json)
-        return void ctx.stdout.write(`${JSON.stringify(stored.recording, null, 2)}\n`);
+      if (options.json) {
+        return void ctx.stdout.write(`${JSON.stringify(definitionOf(stored), null, 2)}\n`);
+      }
       const versions = await ctx.db.recordings.versions(stored.id);
       const openJobs = await ctx.db.jobs.count({ recordingId: stored.id });
+      const head = [
+        `${stored.name}`,
+        `  id         ${stored.id}`,
+        `  updated    ${when(stored.updatedAt)} (${versions.length} version${versions.length === 1 ? "" : "s"})`,
+        `  open jobs  ${openJobs}`,
+      ];
+      if (stored.kind === "api") {
+        const { source } = stored;
+        return void ctx.stdout.write(
+          [
+            ...head,
+            `  type       ${source.provider} feed, board "${source.boardToken}"`,
+            `  feed URL   ${apiSourceFeedUrl(source)}`,
+            ...(source.settings.company ? [`  company    ${source.settings.company}`] : []),
+            "",
+          ].join("\n"),
+        );
+      }
       const params = Object.entries(stored.recording.params).map(
         ([name, spec]) => `${name}${spec.default === undefined ? "" : `=${spec.default}`}`,
       );
       ctx.stdout.write(
         [
-          `${stored.name}`,
-          `  id         ${stored.id}`,
+          ...head,
           `  start URL  ${stored.startUrl}`,
-          `  updated    ${when(stored.updatedAt)} (${versions.length} version${versions.length === 1 ? "" : "s"})`,
-          `  open jobs  ${openJobs}`,
           ...(params.length > 0 ? [`  params     ${params.join(", ")}`] : []),
           "",
           "Steps",
@@ -80,7 +104,7 @@ export function registerRecordings(program: Command, ctx: CliContext): void {
     .option("--force", "overwrite the file if it exists")
     .action(async (ref: string, options: { out?: string; force?: boolean }) => {
       const stored = await ctx.db.recordings.resolve(ref);
-      const text = `${JSON.stringify(stored.recording, null, 2)}\n`;
+      const text = `${JSON.stringify(definitionOf(stored), null, 2)}\n`;
       if (!options.out) return void ctx.stdout.write(text);
       const file = resolve(ctx.cwd, options.out);
       if (existsSync(file) && !options.force) {
@@ -108,13 +132,13 @@ export function registerRecordings(program: Command, ctx: CliContext): void {
           cause: error,
         });
       }
-      const recording = parseRecordingJson(text);
-      const { created } = await ctx.db.recordings.save(recording, `imported from ${path}`);
-      const steps = [...walkSteps(recording.steps)].length;
-      ctx.stderr.write(
-        `${created ? "Imported" : "Updated"} "${recording.name}" (${steps} steps)\n`,
-      );
-      ctx.stdout.write(`${recording.id}\n`);
+      const definition = parseDefinitionJson(text);
+      const { created } = await ctx.db.recordings.save(definition, `imported from ${path}`);
+      const what = isApiSource(definition)
+        ? `${definition.provider} feed`
+        : `${[...walkSteps(definition.steps)].length} steps`;
+      ctx.stderr.write(`${created ? "Imported" : "Updated"} "${definition.name}" (${what})\n`);
+      ctx.stdout.write(`${definition.id}\n`);
     });
 
   recordings

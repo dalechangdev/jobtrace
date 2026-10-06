@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 
 export const ID_PREFIXES = {
   recording: "rec",
+  source: "src",
   recordingVersion: "rcv",
   run: "run",
   job: "job",

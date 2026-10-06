@@ -44,6 +44,9 @@ importers:
       '@jobtrace/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
+      '@jobtrace/sources':
+        specifier: workspace:*
+        version: link:../../packages/sources
       commander:
         specifier: ^15.0.0
         version: 15.0.0
@@ -135,6 +138,9 @@ importers:
       '@jobtrace/runner':
         specifier: workspace:*
         version: link:../runner
+      '@jobtrace/sources':
+        specifier: workspace:*
+        version: link:../sources
     devDependencies:
       '@jobtrace/test-sites':
         specifier: workspace:*
@@ -142,6 +148,22 @@ importers:
       playwright:
         specifier: ^1.63.0
         version: 1.63.0
+
+  packages/sources:
+    dependencies:
+      '@jobtrace/core':
+        specifier: workspace:*
+        version: link:../core
+      '@jobtrace/extractor':
+        specifier: workspace:*
+        version: link:../extractor
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@jobtrace/test-sites':
+        specifier: workspace:*
+        version: link:../test-sites
 
   packages/test-sites:
     dependencies:

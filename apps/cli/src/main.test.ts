@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
+  ATS_PATHS,
   CHANGED_SALARY,
   changingJobs,
   jobsFor,
@@ -230,9 +231,9 @@ describe("stored recordings, tracked runs and jobs", () => {
     expect(recorded.stderr).toContain(`Replay it with: jobtrace run ${recordingId}`);
 
     const list = await cli(["recordings", "list"]);
-    expect(list.stdout).toMatch(/ID\s+NAME\s+SITE\s+OPEN JOBS\s+LAST RUN/);
+    expect(list.stdout).toMatch(/ID\s+TYPE\s+NAME\s+SITE\s+OPEN JOBS\s+LAST RUN/);
     expect(list.stdout).toMatch(
-      new RegExp(`${recordingId}\\s+Changing board\\s+127\\.0\\.0\\.1\\s+0\\s+never`),
+      new RegExp(`${recordingId}\\s+recording\\s+Changing board\\s+127\\.0\\.0\\.1\\s+0\\s+never`),
     );
 
     const show = await cli(["recordings", "show", "changing board"]);
@@ -347,6 +348,105 @@ describe("stored recordings, tracked runs and jobs", () => {
   });
 });
 
+describe("API sources", () => {
+  const baseUrl = (provider: "greenhouse" | "lever" | "ashby") => sites.url(ATS_PATHS[provider]);
+  const setVersion = (version: number) =>
+    fetch(sites.url(`${SITES.changing}__version/${version}`), { method: "POST" });
+
+  it("source add checks the board, stores it, and run tracks its jobs", async () => {
+    await setVersion(1);
+    const added = await cli([
+      "source",
+      "add",
+      "greenhouse",
+      "acme",
+      "--base-url",
+      baseUrl("greenhouse"),
+    ]);
+    expect(added.code).toBe(0);
+    const id = added.stdout.trim();
+    expect(id).toMatch(/^src_/);
+    expect(added.stderr).toContain("Found 5 job(s) on the board.");
+    expect(added.stderr).toContain('Added "acme (Greenhouse)"');
+
+    const first = await cli(["run", id]);
+    expect(first.stderr).toMatch(/succeeded: 5 job\(s\), 5 new, 0 changed/);
+    await setVersion(2);
+    const second = await cli(["run", "acme (greenhouse)"]);
+    expect(second.stderr).toMatch(/succeeded: 5 job\(s\), 1 new, 1 changed/);
+    const jobs = JSON.parse(second.stdout) as Array<{
+      title: string;
+      isNew: boolean;
+      company: string;
+    }>;
+    expect(jobs.filter((job) => job.isNew).map((job) => job.title)).toEqual([
+      changingJobs(2).at(-1)?.title,
+    ]);
+    expect(jobs[0]?.company).toBe("Acme Robotics");
+
+    const list = await cli(["recordings", "list"]);
+    expect(list.stdout).toMatch(
+      new RegExp(`${id}\\s+feed\\s+acme \\(Greenhouse\\)\\s+127\\.0\\.0\\.1\\s+6\\s+succeeded`),
+    );
+    const show = await cli(["recordings", "show", id]);
+    expect(show.stdout).toContain('type       greenhouse feed, board "acme"');
+    expect(show.stdout).toContain("/v1/boards/acme/jobs?content=true");
+    expect(show.stdout).not.toContain("Steps");
+  });
+
+  it("round-trips a source through export and import, and runs a source file as a one-off", async () => {
+    const added = await cli([
+      "source",
+      "add",
+      "lever",
+      "acme",
+      "--name",
+      "Acme Lever",
+      "--company",
+      "Acme Robotics",
+      "--base-url",
+      baseUrl("lever"),
+      "--no-check",
+    ]);
+    expect(added.stderr).not.toContain("Found");
+    const exported = JSON.parse((await cli(["recordings", "export", "Acme Lever"])).stdout);
+    expect(exported).toMatchObject({
+      kind: "api",
+      provider: "lever",
+      boardToken: "acme",
+      settings: { company: "Acme Robotics" },
+    });
+
+    const file = join(dataDir, "source.jobtrace.json");
+    writeFileSync(file, JSON.stringify({ ...exported, id: "src_copy", name: "Lever copy" }));
+    expect((await cli(["recordings", "import", file])).stderr).toMatch(
+      /Imported "Lever copy" \(lever feed\)/,
+    );
+
+    const oneOff = await cli(["run", file]);
+    expect(oneOff.code).toBe(0);
+    const jobs = JSON.parse(oneOff.stdout) as Array<{ company: string; isNew?: boolean }>;
+    expect(jobs).toHaveLength(5);
+    expect(jobs[0]?.company).toBe("Acme Robotics");
+    // A file run is not tracked, so there are no flags.
+    expect(jobs[0]).not.toHaveProperty("isNew");
+  });
+
+  it("does not store a board it cannot read, and rejects unknown providers", async () => {
+    const before = JSON.parse((await cli(["recordings", "list", "--json"])).stdout).length;
+    const missing = await cli(["source", "add", "ashby", "nope", "--base-url", baseUrl("ashby")]);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toMatch(/Could not read .*No ashby board named "nope"/);
+    expect((await cli(["source", "add", "workday", "acme"])).stderr).toMatch(
+      /Unknown provider "workday"/,
+    );
+    expect((await cli(["source", "add", "lever", "bad/token", "--no-check"])).stderr).toMatch(
+      /letters, digits/,
+    );
+    expect(JSON.parse((await cli(["recordings", "list", "--json"])).stdout)).toHaveLength(before);
+  });
+});
+
 describe("helpers", () => {
   it("formats tables, durations and outlines", () => {
     expect(
@@ -358,8 +458,16 @@ describe("helpers", () => {
         ],
       ),
     ).toBe("A             LONG HEADER\nx             1\nlonger value\n");
-    expect(table(["A"], [["multi\n  line   text"], ["y".repeat(60)]])).toBe(
-      `A\nmulti line text\n${"y".repeat(47)}…\n`,
+    expect(
+      table(
+        ["A", "URL"],
+        [
+          ["multi\n  line   text", "u".repeat(60)],
+          ["y".repeat(60), ""],
+        ],
+      ),
+    ).toBe(
+      `${"A".padEnd(48)}  URL\n${"multi line text".padEnd(48)}  ${"u".repeat(60)}\n${"y".repeat(47)}…\n`,
     );
     expect([duration(250), duration(4200), duration(125_000), duration(null)]).toEqual([
       "250ms",

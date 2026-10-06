@@ -1,4 +1,5 @@
 import type { SerializedError } from "./errors.ts";
+import type { NormalizedJob } from "./job.ts";
 import type { Locator, Target } from "./recording.ts";
 
 export const RUN_STATUSES = [
@@ -44,6 +45,20 @@ export interface RunArtifact {
 }
 
 export interface RunFailure extends SerializedError {}
+
+/** What one run produced, whether it replayed a recording in a browser or read an API feed. */
+export interface RunResult {
+  status: FinalRunStatus;
+  /** Short machine-readable cause when the run did not fully succeed, e.g. `locator_not_found`. */
+  reason?: string;
+  error?: RunFailure;
+  jobs: NormalizedJob[];
+  stats: RunStats;
+  events: RunEvent[];
+  artifacts: RunArtifact[];
+  startedAt: string;
+  finishedAt: string;
+}
 
 /** A locator proposed by a LocatorResolver after every recorded locator failed. */
 export interface ResolvedLocator {

@@ -4,6 +4,7 @@ import { Command, CommanderError, InvalidArgumentError } from "commander";
 import { registerJobs } from "./commands/jobs.ts";
 import { registerRecordings } from "./commands/recordings.ts";
 import { registerRuns } from "./commands/runs.ts";
+import { registerSource } from "./commands/source.ts";
 import type { CliContext, MainIo } from "./context.ts";
 import { createLogger, type Logger } from "./logger.ts";
 import { recordCommand } from "./record-command.ts";
@@ -96,8 +97,11 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
 
   program
     .command("run")
-    .description("Replay a recording and print the jobs it finds as JSON")
-    .argument("<recording>", "a stored recording (id, id prefix or name), or a .jobtrace.json file")
+    .description("Run a recording or API source and print the jobs it finds as JSON")
+    .argument(
+      "<recording>",
+      "a stored recording or source (id, id prefix or name), or a .jobtrace.json file",
+    )
     .option("--headed", "show the browser window")
     .option("--trace", "save a Playwright trace (view with: npx playwright show-trace <zip>)")
     .option("--param <key=value>", "set a recording param; repeatable", collect, [])
@@ -109,6 +113,7 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
       exitCode = await runCommand(ref, options, ctx);
     });
 
+  registerSource(program, ctx);
   registerRecordings(program, ctx);
   registerRuns(program, ctx, positiveInt);
   registerJobs(program, ctx, positiveInt);

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { JobTraceError, type RunEvent, toJobTraceError } from "@jobtrace/core";
 import type { Database, RunJobRecord, RunRecord, RunTrigger, StoredArtifact } from "@jobtrace/db";
 import { type RunOptions, runRecording } from "@jobtrace/runner";
+import { type FetchSourceOptions, fetchSource } from "@jobtrace/sources";
 
 /** A job is considered closed after it was missing from this many successful runs in a row. */
 export const DEFAULT_CLOSE_AFTER_MISSED_RUNS = 3;
@@ -17,8 +18,10 @@ export interface ExecuteRunOptions {
   scheduleId?: string;
   /** Execute this already-queued run instead of creating one. */
   runId?: string;
-  /** Options passed through to the replay engine. */
+  /** Options passed through to the replay engine (browser recordings). */
   run?: Omit<RunOptions, "artifactsDir" | "onEvent">;
+  /** Options passed through to the feed reader (API sources). */
+  source?: Omit<FetchSourceOptions, "onEvent" | "signal" | "now">;
   /** Called for every run event, after it was stored. */
   onEvent?: (event: RunEvent) => void;
 }
@@ -44,7 +47,8 @@ export async function removeRunArtifacts(
 }
 
 /**
- * Replays a stored recording and persists everything about it: the run and its
+ * Runs a stored recording (in a browser) or API source (by reading its feed)
+ * and persists everything about it: the run and its
  * event log, the jobs with their new/changed flags, artifacts, jobs that have
  * disappeared, and artifact retention. This is what `jobtrace run <id>` and the
  * worker both call.
@@ -77,11 +81,20 @@ export async function executeRun(
   };
 
   try {
-    const result = await runRecording(stored.recording, {
-      ...options.run,
-      artifactsDir: artifactsDirFor(options.dataDir, id),
-      onEvent: record,
-    });
+    // The two kinds of source differ only in how the jobs are obtained.
+    const result =
+      stored.kind === "api"
+        ? await fetchSource(stored.source, {
+            ...options.source,
+            onEvent: record,
+            ...(options.run?.signal ? { signal: options.run.signal } : {}),
+            ...(options.run?.now ? { now: options.run.now } : {}),
+          })
+        : await runRecording(stored.recording, {
+            ...options.run,
+            artifactsDir: artifactsDirFor(options.dataDir, id),
+            onEvent: record,
+          });
 
     // Whatever the run managed to read was really on the site, so it is stored
     // even when the run then failed or was cancelled.

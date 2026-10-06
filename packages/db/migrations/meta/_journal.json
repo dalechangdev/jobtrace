@@ -15,6 +15,13 @@
       "when": 1791302974263,
       "tag": "0001_jobs_fts",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791304044485,
+      "tag": "0002_recording_kind",
+      "breakpoints": true
     }
   ]
 }

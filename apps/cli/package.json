@@ -13,6 +13,7 @@
     "@jobtrace/recorder": "workspace:*",
     "@jobtrace/runner": "workspace:*",
     "@jobtrace/scheduler": "workspace:*",
+    "@jobtrace/sources": "workspace:*",
     "commander": "^15.0.0",
     "pino": "^10.4.0"
   },

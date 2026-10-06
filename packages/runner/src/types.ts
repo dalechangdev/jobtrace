@@ -1,13 +1,4 @@
-import type {
-  FinalRunStatus,
-  LocatorResolver,
-  NormalizedJob,
-  RecordingSettings,
-  RunArtifact,
-  RunEvent,
-  RunFailure,
-  RunStats,
-} from "@jobtrace/core";
+import type { LocatorResolver, RecordingSettings, RunEvent } from "@jobtrace/core";
 import type { Browser } from "playwright";
 
 /** Timing knobs that are not part of the recording. Mostly overridden by tests. */
@@ -83,15 +74,4 @@ export interface RunOptions {
   tuning?: Partial<RunTuning>;
 }
 
-export interface RunResult {
-  status: FinalRunStatus;
-  /** Short machine-readable cause when the run did not fully succeed, e.g. `locator_not_found`. */
-  reason?: string;
-  error?: RunFailure;
-  jobs: NormalizedJob[];
-  stats: RunStats;
-  events: RunEvent[];
-  artifacts: RunArtifact[];
-  startedAt: string;
-  finishedAt: string;
-}
+export type { RunResult } from "@jobtrace/core";

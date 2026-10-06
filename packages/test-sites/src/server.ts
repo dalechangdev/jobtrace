@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { ATS_PATHS, type AtsFixtureProvider, atsFeed } from "./ats.ts";
 import {
   COMPANY,
   changingJobs,
@@ -347,8 +348,42 @@ ${jobList(jobsFor("login"))}`,
   // Test hook: switch the board to another version of its content.
   app.post<{ Params: { version: string } }>(`${SITES.changing}__version/:version`, (request) => {
     changingVersion = Number(request.params.version) || 1;
+    atsRequests.clear();
     return { version: changingVersion };
   });
+
+  // ATS job-board APIs (Greenhouse, Lever, Ashby), shaped like the real feeds.
+  // The board "acme" follows the same versions as site 11.
+  const atsRequests = new Map<string, number>();
+  const atsReply = (provider: AtsFixtureProvider, token: string, reply: FastifyReply) => {
+    const key = `${provider}/${token}`;
+    const count = (atsRequests.get(key) ?? 0) + 1;
+    atsRequests.set(key, count);
+    if (token === "forbidden") return reply.code(403).send({ error: "Forbidden" });
+    // Rate limited on the first request only, to exercise Retry-After.
+    if (token === "limited" && count === 1) {
+      return reply.code(429).header("retry-after", "1").send({ error: "Too Many Requests" });
+    }
+    if (token === "always-limited") return reply.code(429).header("retry-after", "1").send({});
+    if (token === "broken") return reply.send({ unexpected: true });
+    if (!["acme", "limited", "partial"].includes(token))
+      return reply.code(404).send({ status: 404, error: "Not found" });
+    return reply.send(
+      atsFeed(provider, changingJobs(changingVersion), { malformedEntry: token === "partial" }),
+    );
+  };
+  app.get<{ Params: { token: string } }>(
+    `${ATS_PATHS.greenhouse}/v1/boards/:token/jobs`,
+    (request, reply) => atsReply("greenhouse", request.params.token, reply),
+  );
+  app.get<{ Params: { token: string } }>(
+    `${ATS_PATHS.lever}/v0/postings/:token`,
+    (request, reply) => atsReply("lever", request.params.token, reply),
+  );
+  app.get<{ Params: { token: string } }>(
+    `${ATS_PATHS.ashby}/posting-api/job-board/:token`,
+    (request, reply) => atsReply("ashby", request.params.token, reply),
+  );
 
   // Disallowed by /robots.txt, for the robots_disallowed fixture.
   app.get(SITES.robotsDisallowed, (_request, reply) =>

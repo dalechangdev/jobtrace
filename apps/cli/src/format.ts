@@ -5,19 +5,22 @@ const MAX_CELL = 48;
 const clip = (value: string, max = MAX_CELL) =>
   value.length > max ? `${value.slice(0, max - 1)}…` : value;
 
-/** Plain-text table with padded columns. Cells are single-line and clipped. */
+/**
+ * Plain-text table with padded columns. Cells are single-line; all but the last
+ * column are clipped, so a trailing URL column stays usable.
+ */
 export function table(
   headers: readonly string[],
   rows: ReadonlyArray<ReadonlyArray<string | number | null | undefined>>,
 ): string {
+  const last = headers.length - 1;
   const cells = rows.map((row) =>
-    row.map((cell) =>
-      clip(
-        String(cell ?? "")
-          .replace(/\s+/g, " ")
-          .trim(),
-      ),
-    ),
+    row.map((cell, column) => {
+      const value = String(cell ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
+      return column === last ? value : clip(value);
+    }),
   );
   const widths = headers.map((header, column) =>
     Math.max(header.length, ...cells.map((row) => row[column]?.length ?? 0)),

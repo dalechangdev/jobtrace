@@ -2,9 +2,12 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  apiSourceFeedUrl,
+  isApiSource,
   JobTraceError,
   type NormalizedJob,
   newId,
+  parseApiSource,
   parseRecording,
   type RunEvent,
   type RunStatus,
@@ -148,17 +151,19 @@ export function openDatabase(url: string): Database {
       .orderBy(desc(sql`rowid`))
       .limit(1)
       .get();
-    return {
+    const summary = {
       id: row.id,
       name: row.name,
       startUrl: row.startUrl,
       domain: row.domain,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
-      // Parsing also migrates definitions saved by an older version of the format.
-      recording: parseRecording(JSON.parse(row.definitionJson)),
       versionId: version?.id ?? "",
     };
+    const document: unknown = JSON.parse(row.definitionJson);
+    if (row.kind === "api") return { ...summary, kind: "api", source: parseApiSource(document) };
+    // Parsing also migrates definitions saved by an older version of the format.
+    return { ...summary, kind: "browser", recording: parseRecording(document) };
   }
 
   /** Resolves an id, a unique id prefix, or (optionally) an exact name to one id. */
@@ -215,34 +220,39 @@ export function openDatabase(url: string): Database {
 
   return {
     recordings: {
-      async save(recording, note) {
+      async save(definition, note) {
+        // For an API source the "start URL" is the feed it reads.
+        const startUrl = isApiSource(definition)
+          ? apiSourceFeedUrl(definition)
+          : definition.startUrl;
         return db.transaction((tx) => {
           const now = iso();
-          const definitionJson = JSON.stringify(recording);
+          const definitionJson = JSON.stringify(definition);
           const fields = {
-            name: recording.name,
-            startUrl: recording.startUrl,
-            domain: domainOf(recording.startUrl),
+            kind: isApiSource(definition) ? "api" : "browser",
+            name: definition.name,
+            startUrl,
+            domain: domainOf(startUrl),
             definitionJson,
-            schemaVersion: recording.schemaVersion,
+            schemaVersion: definition.schemaVersion,
             updatedAt: now,
           };
           const existing = tx
             .select({ id: recordings.id })
             .from(recordings)
-            .where(eq(recordings.id, recording.id))
+            .where(eq(recordings.id, definition.id))
             .get();
           if (existing)
-            tx.update(recordings).set(fields).where(eq(recordings.id, recording.id)).run();
+            tx.update(recordings).set(fields).where(eq(recordings.id, definition.id)).run();
           else
             tx.insert(recordings)
-              .values({ id: recording.id, createdAt: now, ...fields })
+              .values({ id: definition.id, createdAt: now, ...fields })
               .run();
           const versionId = newId("recordingVersion");
           tx.insert(recordingVersions)
             .values({
               id: versionId,
-              recordingId: recording.id,
+              recordingId: definition.id,
               definitionJson,
               createdAt: now,
               note: note ?? null,
@@ -282,6 +292,7 @@ export function openDatabase(url: string): Database {
         return db
           .select({
             id: recordings.id,
+            kind: recordings.kind,
             name: recordings.name,
             startUrl: recordings.startUrl,
             domain: recordings.domain,
@@ -290,7 +301,10 @@ export function openDatabase(url: string): Database {
           })
           .from(recordings)
           .orderBy(asc(recordings.name), asc(recordings.id))
-          .all() satisfies RecordingSummary[];
+          .all()
+          .map(
+            (row): RecordingSummary => ({ ...row, kind: row.kind === "api" ? "api" : "browser" }),
+          );
       },
       async versions(id) {
         return db

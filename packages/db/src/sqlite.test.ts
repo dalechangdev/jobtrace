@@ -1,10 +1,10 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type NormalizedJob, parseRecording, type Recording } from "@jobtrace/core";
+import { type NormalizedJob, parseApiSource, parseRecording, type Recording } from "@jobtrace/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDatabase } from "./sqlite.ts";
-import type { Database, StoredRunStats } from "./types.ts";
+import { type Database, definitionOf, type StoredRunStats } from "./types.ts";
 
 let db: Database;
 beforeEach(() => {
@@ -84,7 +84,7 @@ describe("recordings", () => {
       domain: "careers.acme.example",
       versionId: second.versionId,
     });
-    expect(stored?.recording.steps).toHaveLength(1);
+    expect(stored?.kind === "browser" && stored.recording.steps).toHaveLength(1);
     expect(
       (await db.recordings.versions("rec_a")).map((version) => [version.id, version.note]),
     ).toEqual([
@@ -92,6 +92,38 @@ describe("recordings", () => {
       [first.versionId, "recorded"],
     ]);
     expect(await db.recordings.get("rec_missing")).toBeNull();
+  });
+
+  it("stores API sources next to recordings", async () => {
+    const source = parseApiSource({
+      schemaVersion: 1,
+      kind: "api",
+      id: "src_acme",
+      name: "Acme on Lever",
+      provider: "lever",
+      boardToken: "acme",
+    });
+    await db.recordings.save(recording("rec_a"));
+    await db.recordings.save(source, "added");
+
+    const stored = await db.recordings.resolve("acme on lever");
+    expect(stored).toMatchObject({
+      kind: "api",
+      domain: "api.lever.co",
+      startUrl: "https://api.lever.co/v0/postings/acme?mode=json",
+      source: { provider: "lever", boardToken: "acme", settings: { maxItems: 5000 } },
+    });
+    expect(definitionOf(stored)).toEqual(source);
+    expect((await db.recordings.list()).map((item) => [item.id, item.kind])).toEqual([
+      ["rec_a", "browser"],
+      ["src_acme", "api"],
+    ]);
+    const browser = await db.recordings.get("rec_a");
+    expect(browser?.kind).toBe("browser");
+    expect(browser && definitionOf(browser)).toMatchObject({
+      id: "rec_a",
+      steps: expect.any(Array),
+    });
   });
 
   it("resolves by id, unique prefix or name", async () => {

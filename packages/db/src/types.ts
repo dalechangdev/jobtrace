@@ -1,4 +1,7 @@
 import type {
+  ApiSource,
+  Definition,
+  DefinitionKind,
   NormalizedJob,
   Recording,
   RunArtifact,
@@ -10,6 +13,7 @@ import type {
 
 export interface RecordingSummary {
   id: string;
+  kind: DefinitionKind;
   name: string;
   startUrl: string;
   domain: string;
@@ -17,10 +21,18 @@ export interface RecordingSummary {
   updatedAt: string;
 }
 
-export interface StoredRecording extends RecordingSummary {
-  recording: Recording;
+/**
+ * A stored job source: a browser recording, or an API source. Both live in the
+ * `recordings` table and own runs and jobs in the same way.
+ */
+export type StoredRecording = RecordingSummary & {
   /** The latest saved version, which a run records as the one it replayed. */
   versionId: string;
+} & ({ kind: "browser"; recording: Recording } | { kind: "api"; source: ApiSource });
+
+/** The definition held by a stored recording, whichever kind it is. */
+export function definitionOf(stored: StoredRecording): Definition {
+  return stored.kind === "api" ? stored.source : stored.recording;
 }
 
 export interface RecordingVersion {
@@ -115,8 +127,8 @@ export interface StoredArtifact extends RunArtifact {
  */
 export interface Database {
   recordings: {
-    /** Inserts or updates the recording and stores a version snapshot. */
-    save(recording: Recording, note?: string): Promise<{ versionId: string; created: boolean }>;
+    /** Inserts or updates the recording or API source and stores a version snapshot. */
+    save(definition: Definition, note?: string): Promise<{ versionId: string; created: boolean }>;
     get(id: string): Promise<StoredRecording | null>;
     /** Finds a recording by id, unique id prefix, or exact name. Throws NOT_FOUND. */
     resolve(ref: string): Promise<StoredRecording>;

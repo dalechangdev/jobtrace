@@ -7,8 +7,7 @@ source.
 > **Status: early.** You can record a job board with `jobtrace record`, replay it
 > with `jobtrace run`, and browse what it found, including which jobs are new or
 > changed since the last run (milestones M0–M4 of [PLAN.md](PLAN.md)). It is all
-> command-line for now: the web UI, scheduler, login support and ATS API sources are
-> not built yet.
+> command-line for now: the web UI, scheduler and login support are not built yet.
 
 ## Quickstart
 
@@ -32,7 +31,8 @@ is stored in a SQLite database under `DATA_DIR` (default `~/.jobtrace`).
 | Command | What it does |
 |---|---|
 | `record <url>` | Record a board in a browser window and store the recording. |
-| `run <recording>` | Replay a stored recording and track its jobs. |
+| `source add <provider> <board>` | Add a Greenhouse, Lever or Ashby board, read through its public feed. |
+| `run <recording>` | Run a stored recording or source and track its jobs. |
 | `recordings list` / `show` / `export` / `import` / `delete` | Manage stored recordings. `export` and `import` use `.jobtrace.json` files, which can be shared or kept in Git. |
 | `runs list` / `show <run>` | Past runs: status, counts, errors, artifacts; `show --events` prints the log. |
 | `jobs list` | Jobs found so far, newest first. Filters: `--new`, `--recording`, `--since 7d`, `--search text`, `--all`. |
@@ -40,6 +40,30 @@ is stored in a SQLite database under `DATA_DIR` (default `~/.jobtrace`).
 
 Recordings and runs can be referred to by id, by the first characters of the id, or
 (recordings) by name. Most listing commands take `--json`.
+
+### Boards on Greenhouse, Lever or Ashby
+
+Many companies host their job board on one of these services, which publish the
+board as a public JSON feed. For those, skip the browser:
+
+```sh
+jobtrace source add greenhouse acme       # job-boards.greenhouse.io/acme
+jobtrace source add lever acme --company "Acme Robotics"
+jobtrace source add ashby acme --company "Acme Robotics"
+jobtrace run "acme (Greenhouse)"
+```
+
+The board name is the last part of the board's address (`jobs.lever.co/<board>`,
+`jobs.ashbyhq.com/<board>`, `job-boards.greenhouse.io/<board>`). `source add` reads the
+feed once to check that the board exists. After that a source behaves like a recording:
+`run`, `runs`, `jobs` and `recordings list|show|export|delete` all work on it, and its
+jobs are flagged new, changed and closed in the same way.
+
+A feed run is one HTTP request, sent with a `User-Agent` that names JobTrace. If the
+service answers "slow down" the run waits as asked (up to a minute) and retries; if it
+refuses, the run ends as `blocked`. Lever and Ashby feeds do not include the company
+name, hence `--company`. For Lever's EU instance pass
+`--base-url https://api.eu.lever.co`.
 
 ### New, changed and closed jobs
 
