@@ -59,6 +59,7 @@ function toRun(row: RunRow): RunRecord {
     status: row.status as RunStatus,
     reason: row.reason,
     params: parseJson(row.paramsJson) ?? {},
+    options: parseJson(row.optionsJson) ?? {},
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
     stats: parseJson(row.statsJson),
@@ -212,6 +213,7 @@ export function openDatabase(url: string): Database {
     if (filter.recordingId) conditions.push(eq(jobs.recordingId, filter.recordingId));
     if (!filter.includeClosed) conditions.push(isNull(jobs.closedAt));
     if (filter.since) conditions.push(sql`${jobs.firstSeenAt} >= ${filter.since}`);
+    if (filter.until) conditions.push(sql`${jobs.firstSeenAt} < ${filter.until}`);
     if (filter.search?.trim()) {
       conditions.push(
         sql`${jobs.id} IN (SELECT job_id FROM jobs_fts WHERE jobs_fts MATCH ${ftsQuery(filter.search)})`,
@@ -364,6 +366,7 @@ export function openDatabase(url: string): Database {
             trigger: run.trigger,
             status: run.status,
             paramsJson: JSON.stringify(run.params ?? {}),
+            optionsJson: JSON.stringify(run.options ?? {}),
             startedAt: run.status === "running" ? now : null,
             createdAt: now,
           })
@@ -445,11 +448,58 @@ export function openDatabase(url: string): Database {
         return db
           .select()
           .from(runs)
-          .where(filter.recordingId ? eq(runs.recordingId, filter.recordingId) : undefined)
+          .where(
+            and(
+              filter.recordingId ? eq(runs.recordingId, filter.recordingId) : undefined,
+              filter.status ? eq(runs.status, filter.status) : undefined,
+            ),
+          )
           .orderBy(desc(sql`rowid`))
           .limit(filter.limit ?? 50)
           .all()
           .map(toRun);
+      },
+      async claimNext(busyDomains = []) {
+        return db.transaction((tx) => {
+          const next = tx
+            .select({ id: runs.id })
+            .from(runs)
+            .innerJoin(recordings, eq(recordings.id, runs.recordingId))
+            .where(
+              and(
+                eq(runs.status, "queued"),
+                busyDomains.length > 0
+                  ? sql`${recordings.domain} NOT IN ${[...busyDomains]}`
+                  : undefined,
+              ),
+            )
+            .orderBy(asc(sql`${runs}.rowid`))
+            .limit(1)
+            .get();
+          if (!next) return null;
+          tx.update(runs)
+            .set({ status: "running", startedAt: iso() })
+            .where(eq(runs.id, next.id))
+            .run();
+          const row = tx.select().from(runs).where(eq(runs.id, next.id)).get();
+          return row ? toRun(row) : null;
+        });
+      },
+      async cancelQueued(id) {
+        const now = iso();
+        const result = db
+          .update(runs)
+          .set({ status: "cancelled", reason: "run_cancelled", finishedAt: now })
+          .where(and(eq(runs.id, id), eq(runs.status, "queued")))
+          .run();
+        return result.changes > 0;
+      },
+      async failInterrupted() {
+        return db
+          .update(runs)
+          .set({ status: "failed", reason: "interrupted", finishedAt: iso() })
+          .where(eq(runs.status, "running"))
+          .run().changes;
       },
     },
 

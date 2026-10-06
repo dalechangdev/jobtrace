@@ -14,8 +14,8 @@ silently diverging. Record agreed changes in `PLAN.md` itself.
 - [x] M4 — Persistence
 - [x] M4b — ATS API sources (Greenhouse, Lever, Ashby)
 - [x] M5 — Auth profiles and politeness
-- [ ] M6 — API and worker  ← next
-- [ ] M7 — Web UI
+- [x] M6 — API and worker
+- [ ] M7 — Web UI  ← next
 - [ ] M8 — Scheduler
 - [ ] M9 — Packaging and docs
 - [ ] M10 — AI fallback plugin
@@ -54,10 +54,13 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`.
 - `packages/sources` — API sources: adapters mapping the Greenhouse, Lever and Ashby
   feeds to raw job records, and `fetchSource(source, options)`, which returns the same
   `RunResult` as a browser replay. No browser dependency.
-- `packages/scheduler` — `executeRun(db, recordingId, options)`: replay or feed fetch, plus persistence
-  (run, events, jobs with new/changed flags, artifacts, closing, retention). The worker
-  and cron scheduling will be added here.
+- `packages/scheduler` — run execution and queueing: `executeRun` (replay or feed fetch, plus persistence),
+  the `JobQueue` over the `runs` table, the `Worker` that executes queued runs, and the
+  `RunHub` that carries live events to watchers. Cron scheduling will be added here.
 - `packages/test-sites` — mock career sites; `src/data.ts` is the ground truth tests compare against
+- `apps/api` — the HTTP API (Fastify with Zod schemas and OpenAPI). `buildApp(deps)`
+  assembles routes; `startServer(options)` adds the worker and listens, and is what
+  `jobtrace serve` calls. Routes are in `src/routes`, shapes in `src/schemas.ts`.
 - `apps/cli` — the `jobtrace` binary
 - `examples/recordings` — hand-written recordings for the mock sites, also used by tests
 
@@ -96,6 +99,12 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`.
 - Never edit an applied migration; change `schema.ts` and generate a new one. Raw SQL
   that Drizzle cannot express (the FTS table and its triggers) goes in a custom
   migration (`drizzle-kit generate --custom`).
+- API routes declare Zod schemas for params, query, body and every response; responses
+  are serialized through them, so a field missing from a schema is a 500 in tests, not
+  a silent leak. Errors are `{ error: { code, message } }`; throw `JobTraceError` and
+  let the error handler map it (`NOT_FOUND` 404, `INVALID_*` 400).
+- The API must stay safe on localhost: keep the Host and Origin checks in
+  `api/src/security.ts`, and never serve captured page HTML as HTML.
 - CLI commands live in `apps/cli/src/commands`, get a `CliContext`, print results on
   stdout and messages on stderr, and take `--json` where they list things.
 - A row in `recordings` is either a browser recording or an API source (`kind`);

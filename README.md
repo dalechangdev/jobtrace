@@ -7,7 +7,7 @@ source.
 > **Status: early.** You can record a job board with `jobtrace record`, replay it
 > with `jobtrace run`, and browse what it found, including which jobs are new or
 > changed since the last run (milestones M0–M4 of [PLAN.md](PLAN.md)). It is all
-> command-line for now: the web UI and scheduler are not built yet.
+> command-line and an HTTP API for now: the web UI and scheduler are not built yet.
 
 ## Quickstart
 
@@ -37,6 +37,7 @@ is stored in a SQLite database under `DATA_DIR` (default `~/.jobtrace`).
 | `recordings list` / `show` / `export` / `import` / `delete` | Manage stored recordings. `export` and `import` use `.jobtrace.json` files, which can be shared or kept in Git. |
 | `runs list` / `show <run>` | Past runs: status, counts, errors, artifacts; `show --events` prints the log. |
 | `jobs list` | Jobs found so far, newest first. Filters: `--new`, `--recording`, `--since 7d`, `--search text`, `--all`. |
+| `serve` | Run the HTTP API and the worker that executes queued runs. |
 | `db migrate` | Create or upgrade the database (also happens automatically). |
 
 Recordings and runs can be referred to by id, by the first characters of the id, or
@@ -102,6 +103,32 @@ found:
 
 Jobs are matched by their URL (without tracking parameters), or by title, company and
 location when there is no URL.
+
+## `jobtrace serve`
+
+```
+jobtrace serve [--port 4317] [--host 127.0.0.1]
+```
+
+Starts the HTTP API and a worker in one process. Interactive documentation of every
+route is at `http://127.0.0.1:4317/api/docs`. A few to get started:
+
+```sh
+curl http://127.0.0.1:4317/api/recordings
+curl -X POST http://127.0.0.1:4317/api/recordings/<id>/runs -H 'content-type: application/json' -d '{}'
+curl -N http://127.0.0.1:4317/api/runs/<runId>/events/stream     # live log
+curl 'http://127.0.0.1:4317/api/jobs?new=true'
+```
+
+Runs triggered through the API are queued and executed by the worker, at most
+`MAX_CONCURRENT_RUNS` (default 2) at a time and never two on the same site.
+`jobtrace run <recording> --queue` queues a run from the command line instead of
+executing it right away. Ctrl+C stops the server and cancels running runs.
+
+The server listens on localhost only. To expose it to other machines, set `HOST` and
+an `API_TOKEN`; every request must then send `Authorization: Bearer <token>`.
+Recording and login windows can only be opened through the API when the server is on
+localhost, since they appear on the server's own screen.
 
 ## `jobtrace record`
 
@@ -170,6 +197,7 @@ replayed as a one-off: its jobs are printed but nothing is stored or compared.
 | `--artifacts <dir>` | For recording files: where failure screenshots, DOM snapshots and traces go. |
 | `--max-pages`, `--max-items` | Override the recording's limits for this run. |
 | `--summary` | Print the run's status, stats and artifact paths along with the jobs. |
+| `--queue` | Do not run now; queue the run for a running `jobtrace serve`. |
 
 Failure screenshots, DOM snapshots and traces are saved under
 `DATA_DIR/artifacts/<run>` and kept for a recording's newest 20 runs

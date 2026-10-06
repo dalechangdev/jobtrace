@@ -497,6 +497,17 @@ jobtrace db migrate
   - `GET/POST/DELETE /api/auth-profiles` (create starts a headed login session)
   - `GET /api/health`
 
+### Decisions made while building M6
+- **`jobtrace run` still executes in-process by default**; `--queue` hands the run to a running `jobtrace serve` instead. The plan had it the other way round (`--now` to run in-process), but a queued run with no server running would simply never start. `--now` is accepted and means the default.
+- **Extra routes**: `POST /api/sources` (add an ATS feed), `GET /api/runs/:id/events` (the stored log as JSON), `POST /api/auth-profiles/:id/refresh`, and `POST /api/record-sessions/:id/stop`. `GET /api/record-sessions/:id` reports both recorder and login windows.
+- **Windows opened by the API are one at a time and localhost-only**: they appear on the server's own screen, so the routes refuse when the server is bound to another address.
+- **Localhost is not treated as safe by default.** When bound to loopback the server rejects requests whose `Host` header is not a loopback name (DNS rebinding), and it always rejects requests with a cross-site `Origin`. With a token configured, every `/api` route except `/api/health` requires it; event streams also accept it as `?access_token=` because browsers cannot set headers on an `EventSource`.
+- **Artifacts are served as inert content**: captured pages as `text/plain` with `nosniff` and a sandboxing CSP, never as HTML from the API's origin; only files under `DATA_DIR/artifacts` are served.
+- **Event stream**: `log` events numbered by position in the run's log (so `Last-Event-ID` resumes without duplicates), then one `end` event carrying the finished run.
+- **Definitions are described loosely in the OpenAPI document** (the step tree is recursive) and validated in full by the handlers.
+- **The worker passes over queued runs whose site is busy**, so one site's queue does not hold up others. On shutdown it cancels running runs; on startup, runs left `running` are failed with reason `interrupted`.
+- Queued runs carry their launch options (`headed`, `trace`) in a new `runs.options_json` column.
+
 ### 14.3 UI (`apps/web`)
 - **Dashboard**: recent runs with statuses, new jobs since last visit, upcoming scheduled runs.
 - **Recordings**: list; detail shows the step tree (collapsible), lets you edit fields, rename, reorder locators, accept AI suggestions, set params and settings, view version history, and use **Run now** / **Run headed** / **Test step**.

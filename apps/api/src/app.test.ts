@@ -1,0 +1,673 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type Config, loadConfig } from "@jobtrace/core";
+import { type Database, openDatabase } from "@jobtrace/db";
+import {
+  ATS_PATHS,
+  changingJobs,
+  jobsFor,
+  LOGIN_CREDENTIALS,
+  type RunningTestSites,
+  SITES,
+  startTestSites,
+} from "@jobtrace/test-sites";
+import { type Browser, chromium } from "playwright";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { type RunningServer, startServer } from "./server.ts";
+import type { SessionHooks } from "./sessions.ts";
+
+let sites: RunningTestSites;
+let browser: Browser;
+let dataDir: string;
+let db: Database;
+let server: RunningServer;
+let hooks: SessionHooks;
+
+beforeAll(async () => {
+  sites = await startTestSites();
+  browser = await chromium.launch();
+});
+afterAll(async () => {
+  await browser?.close();
+  await sites?.close();
+});
+
+async function start(env: Record<string, string> = {}): Promise<Config> {
+  const config = loadConfig({ DATA_DIR: dataDir, ...env });
+  hooks = { recorder: { browser, headless: true, openShadow: true } };
+  server = await startServer({
+    config,
+    db,
+    port: 0,
+    listenHost: "127.0.0.1",
+    sessionHooks: hooks,
+    worker: {
+      pollIntervalMs: 50,
+      run: {
+        browser,
+        settings: { minDelayMs: 0, maxDelayMs: 0, stepTimeoutMs: 1500 },
+        tuning: { pollIntervalMs: 25, fallbackGraceMs: 100, optionalFieldTimeoutMs: 100 },
+      },
+    },
+  });
+  return config;
+}
+
+beforeEach(async () => {
+  dataDir = mkdtempSync(join(tmpdir(), "jobtrace-api-"));
+  db = openDatabase(":memory:");
+  await fetch(sites.url(`${SITES.changing}__version/1`), { method: "POST" });
+  await start();
+});
+afterEach(async () => {
+  await server.close();
+  db.close();
+  rmSync(dataDir, { recursive: true, force: true });
+});
+
+type Method = "GET" | "POST" | "PUT" | "DELETE";
+async function api(
+  method: Method,
+  url: string,
+  payload?: unknown,
+  headers: Record<string, string> = {},
+) {
+  const response = await server.app.inject({
+    method,
+    url,
+    headers,
+    ...(payload === undefined ? {} : { payload: payload as object }),
+  });
+  const text = response.body;
+  let body: unknown = text;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // Not JSON (a file, an event stream).
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: test helper; each test asserts the shape it expects
+  return { status: response.statusCode, body: body as any, headers: response.headers, text };
+}
+
+const item = (css: string) => ({ locators: [{ kind: "css", value: css }], relativeTo: "item" });
+/** A recording definition as a client would send it: no id, format version 1 (migrated on the way in). */
+function board(path: string = SITES.changing, extra: object[] = [], name = "Changing board") {
+  return {
+    schemaVersion: 1,
+    name,
+    startUrl: sites.url(path),
+    steps: [
+      { id: "s1", type: "navigate", url: sites.url(path) },
+      ...extra,
+      {
+        id: "s2",
+        type: "forEach",
+        items: { locators: [{ kind: "css", value: "li.job" }] },
+        body: [
+          {
+            id: "s3",
+            type: "extract",
+            scope: "item",
+            fields: [
+              { name: "title", target: item(".title"), required: true },
+              { name: "salaryText", target: item(".salary") },
+              {
+                name: "url",
+                target: item("a.title"),
+                read: "attr",
+                attr: "href",
+                transforms: ["absoluteUrl"],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+const slow = [{ id: "wait", type: "waitFor", ms: 10_000 }];
+
+async function createBoard(...args: Parameters<typeof board>): Promise<string> {
+  const created = await api("POST", "/api/recordings", board(...args));
+  expect(created.status).toBe(201);
+  return created.body.id as string;
+}
+async function runToEnd(recordingId: string, body: object = {}) {
+  const queued = await api("POST", `/api/recordings/${recordingId}/runs`, body);
+  expect(queued.status).toBe(202);
+  await server.worker.idle();
+  return (await api("GET", `/api/runs/${queued.body.id}`)).body;
+}
+
+describe("recordings", () => {
+  it("creates, lists, reads, updates, versions and deletes", async () => {
+    expect((await api("GET", "/api/recordings")).body).toEqual([]);
+    const created = await api("POST", "/api/recordings", board());
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+    expect(id).toMatch(/^rec_/);
+    expect(created.body).toMatchObject({
+      kind: "browser",
+      name: "Changing board",
+      domain: "127.0.0.1",
+      openJobs: 0,
+      // Stored in the current format, with defaults filled in.
+      definition: { schemaVersion: 2, id, settings: { maxPages: 20 } },
+    });
+
+    const updated = await api("PUT", `/api/recordings/${id}`, {
+      ...board(),
+      name: "Renamed",
+      id: "ignored",
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({ id, name: "Renamed" });
+    const versions = await api("GET", `/api/recordings/${id}/versions`);
+    expect(versions.body.map((version: { note: string }) => version.note)).toEqual([
+      "edited",
+      "created through the API",
+    ]);
+    expect(updated.body.versionId).toBe(versions.body[0].id);
+
+    const list = await api("GET", "/api/recordings");
+    expect(list.body).toMatchObject([{ id, name: "Renamed", openJobs: 0, lastRun: null }]);
+    expect((await api("GET", `/api/recordings/${id}`)).body.definition.steps).toHaveLength(2);
+
+    expect((await api("DELETE", `/api/recordings/${id}`)).status).toBe(204);
+    expect((await api("GET", `/api/recordings/${id}`)).status).toBe(404);
+    expect((await api("DELETE", `/api/recordings/${id}`)).body).toEqual({
+      error: { code: "NOT_FOUND", message: `No recording ${id}` },
+    });
+  });
+
+  it("rejects invalid definitions and duplicate ids with a readable message", async () => {
+    const invalid = await api("POST", "/api/recordings", {
+      ...board(),
+      steps: [{ id: "s1", type: "teleport" }],
+    });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error).toMatchObject({
+      code: "INVALID_RECORDING",
+      message: expect.stringMatching(/steps\[0\]/),
+    });
+
+    const id = await createBoard();
+    const duplicate = await api("POST", "/api/recordings", { ...board(), id });
+    expect(duplicate.status).toBe(400);
+    expect(duplicate.body.error.message).toMatch(/already exists; use PUT/);
+    expect((await api("PUT", `/api/recordings/${id}`, { ...board(), steps: "nope" })).status).toBe(
+      400,
+    );
+    expect((await api("PUT", "/api/recordings/rec_nope", board())).status).toBe(404);
+    expect(
+      (
+        await api("PUT", `/api/recordings/${id}`, {
+          kind: "api",
+          schemaVersion: 1,
+          name: "x",
+          provider: "lever",
+          boardToken: "acme",
+        })
+      ).body.error.message,
+    ).toMatch(/cannot be turned into an API source/);
+  });
+
+  it("adds API sources after checking the feed, and stores nothing for an unknown board", async () => {
+    const added = await api("POST", "/api/sources", {
+      provider: "greenhouse",
+      boardToken: "acme",
+      baseUrl: sites.url(ATS_PATHS.greenhouse),
+    });
+    expect(added.status).toBe(201);
+    expect(added.body).toMatchObject({
+      kind: "api",
+      name: "acme (greenhouse)",
+      definition: { provider: "greenhouse" },
+    });
+    expect(added.body.id).toMatch(/^src_/);
+
+    const missing = await api("POST", "/api/sources", {
+      provider: "lever",
+      boardToken: "nope",
+      baseUrl: sites.url(ATS_PATHS.lever),
+    });
+    expect(missing.status).toBe(404);
+    expect(missing.body.error.message).toMatch(/No lever board named "nope"/);
+    expect(
+      (await api("POST", "/api/sources", { provider: "workday", boardToken: "acme" })).status,
+    ).toBe(400);
+    expect((await api("GET", "/api/recordings")).body).toHaveLength(1);
+
+    const run = await runToEnd(added.body.id);
+    expect(run.run).toMatchObject({ status: "succeeded", stats: { jobs: 5, newJobs: 5 } });
+  });
+});
+
+describe("runs and jobs", () => {
+  it("queues a run, executes it, and reports its jobs with new and changed flags", async () => {
+    const id = await createBoard();
+    const queued = await api("POST", `/api/recordings/${id}/runs`, { trace: true });
+    expect(queued.status).toBe(202);
+    expect(queued.body).toMatchObject({
+      status: "queued",
+      trigger: "manual",
+      options: { trace: true },
+      stats: null,
+    });
+    await server.worker.idle();
+
+    const first = (await api("GET", `/api/runs/${queued.body.id}`)).body;
+    expect(first.run).toMatchObject({
+      status: "succeeded",
+      stats: { jobs: 5, newJobs: 5, changedJobs: 0 },
+    });
+    expect(first.jobs.map((job: { title: string }) => job.title)).toEqual(
+      changingJobs(1).map((job) => job.title),
+    );
+    expect(first.artifacts.map((artifact: { type: string }) => artifact.type)).toEqual(["trace"]);
+
+    await fetch(sites.url(`${SITES.changing}__version/2`), { method: "POST" });
+    const second = await runToEnd(id);
+    expect(second.run.stats).toMatchObject({ newJobs: 1, changedJobs: 1 });
+    expect(second.jobs.filter((job: { isNew: boolean }) => job.isNew)).toHaveLength(1);
+    expect(second.jobs.filter((job: { isChanged: boolean }) => job.isChanged)).toHaveLength(1);
+
+    const runs = await api("GET", `/api/runs?recording=${id}`);
+    expect(runs.body.map((run: { id: string }) => run.id)).toEqual([second.run.id, first.run.id]);
+    expect((await api("GET", "/api/runs?status=failed")).body).toEqual([]);
+    expect((await api("GET", "/api/runs?status=nope")).status).toBe(400);
+    const events = await api("GET", `/api/runs/${second.run.id}/events`);
+    expect(events.body.map((event: { type: string }) => event.type)).toEqual(
+      expect.arrayContaining(["run_started", "for_each", "jobs_saved"]),
+    );
+    expect((await api("GET", "/api/recordings")).body[0]).toMatchObject({
+      openJobs: 6,
+      lastRun: { id: second.run.id },
+    });
+    expect((await api("POST", "/api/recordings/rec_nope/runs", {})).status).toBe(404);
+    expect((await api("GET", "/api/runs/run_nope")).status).toBe(404);
+  });
+
+  it("searches, filters and pages jobs", async () => {
+    const id = await createBoard();
+    await runToEnd(id);
+    const before = new Date().toISOString();
+    await fetch(sites.url(`${SITES.changing}__version/2`), { method: "POST" });
+    await runToEnd(id);
+    const added = changingJobs(2).at(-1)?.title;
+
+    const all = await api("GET", "/api/jobs");
+    expect(all.body).toMatchObject({ total: 6, page: 1, pageSize: 50 });
+    expect(all.body.items[0]).toMatchObject({
+      title: added,
+      company: null,
+      closedAt: null,
+      custom: {},
+    });
+    const titles = async (query: string) =>
+      (await api("GET", `/api/jobs?${query}`)).body.items.map(
+        (job: { title: string }) => job.title,
+      );
+    expect(await titles("new=true")).toEqual([added]);
+    expect(await titles("q=frontend")).toEqual(["Frontend Engineer"]);
+    expect(await titles(`from=${encodeURIComponent(before)}`)).toEqual([added]);
+    expect(await titles(`to=${encodeURIComponent(before)}`)).toHaveLength(5);
+    expect(await titles(`recording=${id}&pageSize=2&page=3`)).toHaveLength(2);
+    expect(await titles("recording=rec_other")).toEqual([]);
+    expect((await api("GET", "/api/jobs?pageSize=2&page=2")).body).toMatchObject({
+      total: 6,
+      page: 2,
+      pageSize: 2,
+    });
+
+    const job = all.body.items[0];
+    expect((await api("GET", `/api/jobs/${job.id}`)).body).toEqual(job);
+    expect((await api("GET", "/api/jobs/job_nope")).status).toBe(404);
+    const invalid = await api("GET", "/api/jobs?page=0&from=yesterday");
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error).toMatchObject({
+      code: "INVALID_ARGUMENT",
+      message: expect.stringMatching(/page|from/),
+    });
+  });
+
+  it("cancels a running run and a queued one, and refuses when there is nothing to cancel", async () => {
+    const id = await createBoard(SITES.changing, slow);
+    const running = (await api("POST", `/api/recordings/${id}/runs`, {})).body;
+    const queued = (await api("POST", `/api/recordings/${id}/runs`, {})).body;
+    await expect.poll(() => server.worker.active()).toEqual([running.id]);
+    expect((await api("GET", "/api/health")).body).toEqual({
+      status: "ok",
+      activeRuns: 1,
+      queuedRuns: 1,
+    });
+
+    const cancelQueued = await api("POST", `/api/runs/${queued.id}/cancel`);
+    expect(cancelQueued.status).toBe(202);
+    expect(cancelQueued.body).toMatchObject({ status: "cancelled", reason: "run_cancelled" });
+
+    expect((await api("POST", `/api/runs/${running.id}/cancel`)).status).toBe(202);
+    await server.worker.idle();
+    expect((await api("GET", `/api/runs/${running.id}`)).body.run).toMatchObject({
+      status: "cancelled",
+    });
+
+    const again = await api("POST", `/api/runs/${running.id}/cancel`);
+    expect(again.status).toBe(409);
+    expect(again.body.error.message).toBe("The run already ended (cancelled).");
+    expect((await api("POST", "/api/runs/run_nope/cancel")).status).toBe(404);
+  });
+
+  it("serves artifacts safely: screenshots as images, captured pages as plain text", async () => {
+    const id = await createBoard("/no-such-page/");
+    const { run, artifacts } = await runToEnd(id);
+    expect(run).toMatchObject({ status: "failed", reason: "navigation_failed" });
+    const [screenshot, dom] = artifacts as Array<{ id: string; type: string }>;
+    expect([screenshot?.type, dom?.type]).toEqual(["screenshot", "dom"]);
+
+    const image = await server.app.inject({
+      url: `/api/runs/${run.id}/artifacts/${screenshot?.id}`,
+    });
+    expect(image.headers["content-type"]).toBe("image/png");
+    expect(image.rawPayload.subarray(1, 4).toString()).toBe("PNG");
+
+    const page = await api("GET", `/api/runs/${run.id}/artifacts/${dom?.id}`);
+    expect(page.headers["content-type"]).toBe("text/plain; charset=utf-8");
+    expect(page.headers["x-content-type-options"]).toBe("nosniff");
+    expect(page.headers["content-security-policy"]).toContain("sandbox");
+    expect(page.text).toMatch(/not found/i);
+    // The captured markup arrives as text, tags and all.
+    expect(page.text).toContain("<html");
+
+    expect((await api("GET", `/api/runs/${run.id}/artifacts/art_nope`)).status).toBe(404);
+    // A row pointing outside the artifacts directory is never served.
+    await db.artifacts.add(run.id, [{ type: "dom", path: "/etc/hosts" }]);
+    const rogue = (await db.artifacts.forRun(run.id)).at(-1);
+    expect((await api("GET", `/api/runs/${run.id}/artifacts/${rogue?.id}`)).status).toBe(404);
+  });
+});
+
+describe("event stream", () => {
+  const parse = (text: string) =>
+    text
+      .split("\n\n")
+      .filter((block) => block.includes("data: "))
+      .map((block) => ({
+        id: /^id: (\d+)$/m.exec(block)?.[1],
+        event: /^event: (\w+)$/m.exec(block)?.[1],
+        data: JSON.parse(/^data: (.*)$/m.exec(block)?.[1] ?? "null"),
+      }));
+
+  it("replays a finished run's log and ends with the run", async () => {
+    const id = await createBoard();
+    const { run } = await runToEnd(id);
+    const stream = await api("GET", `/api/runs/${run.id}/events/stream`);
+    expect(stream.headers["content-type"]).toBe("text/event-stream; charset=utf-8");
+    const events = parse(stream.text);
+    const stored = (await api("GET", `/api/runs/${run.id}/events`)).body;
+    expect(events.filter((event) => event.event === "log").map((event) => event.data)).toEqual(
+      stored,
+    );
+    expect(events.map((event) => event.id).filter(Boolean)).toEqual(
+      stored.map((_: unknown, index: number) => String(index)),
+    );
+    expect(events.at(-1)).toMatchObject({
+      event: "end",
+      data: { id: run.id, status: "succeeded" },
+    });
+
+    // Resuming after event 2 skips what the client already has.
+    const resumed = parse(
+      (await api("GET", `/api/runs/${run.id}/events/stream`, undefined, { "last-event-id": "2" }))
+        .text,
+    );
+    expect(resumed[0]?.id).toBe("3");
+    expect((await api("GET", "/api/runs/run_nope/events/stream")).status).toBe(404);
+  });
+
+  it("delivers events while the run is still going, over a real connection", async () => {
+    const id = await createBoard(SITES.changing, [{ id: "wait", type: "waitFor", ms: 700 }]);
+    const queued = (await api("POST", `/api/recordings/${id}/runs`, {})).body;
+    const response = await fetch(`${server.url}/api/runs/${queued.id}/events/stream`);
+    expect(response.status).toBe(200);
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    let statusWhenFirstEventArrived: string | undefined;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+      if (statusWhenFirstEventArrived === undefined && text.includes("event: log")) {
+        statusWhenFirstEventArrived = (await db.runs.get(queued.id))?.status;
+      }
+    }
+    // The first log lines arrived before the run was over: the stream is live, not a replay.
+    expect(statusWhenFirstEventArrived).toBe("running");
+    const events = parse(text);
+    expect(events.map((event) => event.data.type)).toEqual(
+      expect.arrayContaining(["run_started", "for_each", "run_finished", "jobs_saved"]),
+    );
+    expect(events.at(-1)).toMatchObject({
+      event: "end",
+      data: { status: "succeeded", stats: { jobs: 5 } },
+    });
+    expect(events.filter((event) => event.event === "log").map((event) => event.data)).toEqual(
+      await db.runs.events(queued.id),
+    );
+  });
+
+  it("ends the stream of a run that is cancelled while queued", async () => {
+    const id = await createBoard(SITES.changing, slow);
+    const running = (await api("POST", `/api/recordings/${id}/runs`, {})).body;
+    const queued = (await api("POST", `/api/recordings/${id}/runs`, {})).body;
+    const pending = fetch(`${server.url}/api/runs/${queued.id}/events/stream`).then((response) =>
+      response.text(),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await api("POST", `/api/runs/${queued.id}/cancel`);
+    expect(parse(await pending).at(-1)).toMatchObject({
+      event: "end",
+      data: { status: "cancelled" },
+    });
+    await api("POST", `/api/runs/${running.id}/cancel`);
+    await server.worker.idle();
+  });
+});
+
+describe("recording and login windows", () => {
+  const ui = (page: import("playwright").Page) => page.locator("#__jobtrace-overlay");
+  const poll = async (id: string) => (await api("GET", `/api/record-sessions/${id}`)).body;
+
+  it("records through the API and stores the result", async () => {
+    hooks.onRecording = (session) => {
+      void (async () => {
+        const { page } = session;
+        const press = (action: string) => ui(page).locator(`[data-action="${action}"]`).click();
+        await press("list");
+        await page.locator("li.job .loc").first().click();
+        await press("list-use");
+        await expect.poll(() => session.status().scope).toBe("list");
+        await page.locator("li.job .title").first().click();
+        await press("save");
+        await expect.poll(() => session.status().fields).toEqual(["title"]);
+      })();
+    };
+    const started = await api("POST", "/api/recordings/record", {
+      url: sites.url(SITES.staticList),
+      name: "From the UI",
+    });
+    expect(started.status).toBe(202);
+    expect(started.body).toMatchObject({ kind: "recording", status: "active", resultId: null });
+    const id = started.body.id as string;
+
+    // Only one window at a time.
+    const second = await api("POST", "/api/recordings/record", {
+      url: sites.url(SITES.staticList),
+    });
+    expect(second.status).toBe(400);
+    expect(second.body.error.message).toMatch(/still open/);
+
+    await expect.poll(async () => (await poll(id)).progress?.fields).toEqual(["title"]);
+    expect(await poll(id)).toMatchObject({
+      status: "active",
+      progress: { scope: "list", steps: 1 },
+    });
+    const stopped = await api("POST", `/api/record-sessions/${id}/stop`);
+    expect(stopped.body).toMatchObject({ status: "finished", progress: null, warnings: [] });
+
+    const recording = await api("GET", `/api/recordings/${stopped.body.resultId}`);
+    expect(recording.body).toMatchObject({ name: "From the UI", kind: "browser" });
+    const run = await runToEnd(recording.body.id);
+    expect(run.jobs.map((job: { title: string }) => job.title)).toEqual(
+      jobsFor("staticList").map((job) => job.title),
+    );
+    expect((await api("GET", "/api/record-sessions/ses_nope")).status).toBe(404);
+    expect((await api("POST", "/api/recordings/record", { url: "not a url" })).status).toBe(400);
+    expect(
+      (
+        await api("POST", "/api/recordings/record", {
+          url: sites.url("/"),
+          authProfileId: "auth_nope",
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  it("captures, lists, refreshes and deletes a saved login without exposing the session file", async () => {
+    hooks.onAuthCapture = (capture) => {
+      void (async () => {
+        const { page } = capture;
+        await page.locator('input[name="username"]').fill(LOGIN_CREDENTIALS.username);
+        await page.locator('input[name="password"]').fill(LOGIN_CREDENTIALS.password);
+        await page.getByRole("button", { name: "Sign in" }).click();
+        await page.getByTestId("signed-in").waitFor();
+        await ui(page).locator('[data-action="auth-save"]').click();
+      })();
+    };
+    const url = sites.url(`${SITES.login}signin`);
+    const started = await api("POST", "/api/auth-profiles", { name: "Intranet", url });
+    expect(started.status).toBe(202);
+    expect(started.body).toMatchObject({ kind: "auth", status: "active" });
+    await expect.poll(async () => (await poll(started.body.id)).status).toBe("finished");
+    const profileId = (await poll(started.body.id)).resultId as string;
+
+    const profiles = await api("GET", "/api/auth-profiles");
+    expect(profiles.body).toEqual([
+      {
+        id: profileId,
+        name: "Intranet",
+        domain: "127.0.0.1",
+        createdAt: expect.any(String),
+        lastVerifiedAt: null,
+        usedBy: 0,
+      },
+    ]);
+    expect(profiles.text).not.toMatch(/storageState|\.json|auth\//);
+    expect(
+      (await api("POST", "/api/auth-profiles", { name: "intranet", url })).body.error.message,
+    ).toMatch(/already exists/);
+
+    const refresh = await api("POST", `/api/auth-profiles/${profileId}/refresh`, { url });
+    expect(refresh.status).toBe(202);
+    await expect.poll(async () => (await poll(refresh.body.id)).status).toBe("finished");
+    expect((await api("POST", "/api/auth-profiles/auth_nope/refresh", {})).status).toBe(404);
+
+    hooks.onAuthCapture = () => {};
+    const abandoned = await api("POST", `/api/auth-profiles/${profileId}/refresh`, { url });
+    expect((await api("POST", `/api/record-sessions/${abandoned.body.id}/stop`)).body.status).toBe(
+      "cancelled",
+    );
+
+    expect((await api("DELETE", `/api/auth-profiles/${profileId}`)).status).toBe(204);
+    expect((await api("GET", "/api/auth-profiles")).body).toEqual([]);
+    expect((await api("DELETE", `/api/auth-profiles/${profileId}`)).status).toBe(404);
+  });
+});
+
+describe("security and documentation", () => {
+  it("only answers requests addressed to localhost, and refuses cross-site requests", async () => {
+    expect((await api("GET", "/api/health")).status).toBe(200);
+    const rebound = await api("GET", "/api/recordings", undefined, { host: "evil.example" });
+    expect(rebound.status).toBe(403);
+    expect(rebound.body.error.message).toMatch(/only answers requests addressed to localhost/);
+    for (const host of ["127.0.0.1:4317", "[::1]:4317", "LOCALHOST"]) {
+      expect((await api("GET", "/api/health", undefined, { host })).status).toBe(200);
+    }
+    const crossSite = await api("POST", "/api/recordings", board(), {
+      origin: "https://evil.example",
+    });
+    expect(crossSite.status).toBe(403);
+    expect(
+      (await api("GET", "/api/health", undefined, { origin: "http://localhost:80" })).status,
+    ).toBe(200);
+    expect((await api("GET", "/api/health", undefined, { origin: "null" })).status).toBe(403);
+    expect((await api("GET", "/api/nope")).body).toEqual({
+      error: { code: "NOT_FOUND", message: "No such route" },
+    });
+  });
+
+  it("requires the API token when one is configured, and keeps windows local", async () => {
+    await server.close();
+    await start({ HOST: "0.0.0.0", API_TOKEN: "s3cret-token" });
+    const headers = { authorization: "Bearer s3cret-token" };
+    expect((await api("GET", "/api/health")).status).toBe(200);
+    expect((await api("GET", "/api/recordings")).status).toBe(401);
+    expect(
+      (await api("GET", "/api/recordings", undefined, { authorization: "Bearer wrong-token-xx" }))
+        .status,
+    ).toBe(401);
+    expect((await api("GET", "/api/recordings", undefined, headers)).status).toBe(200);
+    // A token in the URL is accepted for event streams only.
+    expect((await api("GET", "/api/recordings?access_token=s3cret-token")).status).toBe(401);
+    const id = (await api("POST", "/api/recordings", board(), headers)).body.id;
+    const run = (await api("POST", `/api/recordings/${id}/runs`, {}, headers)).body;
+    await server.worker.idle();
+    expect(
+      (await api("GET", `/api/runs/${run.id}/events/stream?access_token=s3cret-token`)).status,
+    ).toBe(200);
+    expect((await api("GET", `/api/runs/${run.id}/events/stream`)).status).toBe(401);
+
+    // Not bound to localhost: opening windows on the server's screen is refused.
+    const refused = await api("POST", "/api/recordings/record", { url: sites.url("/") }, headers);
+    expect(refused.status).toBe(400);
+    expect(refused.body.error.message).toMatch(
+      /only available when the server is bound to localhost/,
+    );
+    expect(() => loadConfig({ HOST: "0.0.0.0" })).toThrow(/API_TOKEN is required/);
+  });
+
+  it("publishes an OpenAPI description of every route", async () => {
+    const spec = (await api("GET", "/api/docs/json")).body;
+    expect(spec.info.title).toBe("JobTrace API");
+    expect(Object.keys(spec.paths)).toEqual(
+      expect.arrayContaining([
+        "/api/recordings",
+        "/api/recordings/{id}",
+        "/api/recordings/{id}/versions",
+        "/api/recordings/{id}/runs",
+        "/api/recordings/record",
+        "/api/record-sessions/{id}",
+        "/api/sources",
+        "/api/runs",
+        "/api/runs/{id}",
+        "/api/runs/{id}/cancel",
+        "/api/runs/{id}/events/stream",
+        "/api/runs/{id}/artifacts/{artifactId}",
+        "/api/jobs",
+        "/api/jobs/{id}",
+        "/api/auth-profiles",
+        "/api/health",
+      ]),
+    );
+    expect(
+      spec.paths["/api/jobs"].get.parameters.map((parameter: { name: string }) => parameter.name),
+    ).toEqual(expect.arrayContaining(["recording", "new", "q", "from", "to", "page"]));
+    expect(
+      spec.paths["/api/runs/{id}"].get.responses["200"].content["application/json"].schema
+        .properties,
+    ).toHaveProperty("jobs");
+    expect((await server.app.inject({ url: "/api/docs" })).statusCode).toBeLessThan(400);
+  });
+});

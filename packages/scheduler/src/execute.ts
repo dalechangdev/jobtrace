@@ -108,15 +108,26 @@ export async function executeRun(
   if (!stored) throw new JobTraceError("NOT_FOUND", `No recording ${recordingId}`);
 
   let runId = options.runId;
-  if (runId) await db.runs.markRunning(runId);
-  else {
+  // A queued run carries its own params and launch options; explicit ones win.
+  let launch = options.run ?? {};
+  if (runId) {
+    const queued = await db.runs.get(runId);
+    if (!queued) throw new JobTraceError("NOT_FOUND", `No run ${runId}`);
+    launch = {
+      params: queued.params,
+      ...(queued.options.headed ? { headed: true } : {}),
+      ...(queued.options.trace ? { trace: true } : {}),
+      ...launch,
+    };
+    if (queued.status !== "running") await db.runs.markRunning(runId);
+  } else {
     const created = await db.runs.create({
       recordingId,
       recordingVersionId: stored.versionId || null,
       scheduleId: options.scheduleId ?? null,
       trigger: options.trigger,
       status: "running",
-      params: options.run?.params ?? {},
+      params: launch.params ?? {},
     });
     runId = created.id;
   }
@@ -135,7 +146,7 @@ export async function executeRun(
       if (options.politeness?.locks.isBusy(stored.domain)) {
         record(note("info", "waiting", `Waiting for another run on ${stored.domain} to finish`));
       }
-      release = await options.politeness?.locks.acquire(stored.domain, options.run?.signal);
+      release = await options.politeness?.locks.acquire(stored.domain, launch.signal);
 
       // The two kinds of source differ only in how the jobs are obtained.
       if (stored.kind === "api") {
@@ -143,13 +154,13 @@ export async function executeRun(
           ...options.source,
           ...robots,
           onEvent: record,
-          ...(options.run?.signal ? { signal: options.run.signal } : {}),
-          ...(options.run?.now ? { now: options.run.now } : {}),
+          ...(launch.signal ? { signal: launch.signal } : {}),
+          ...(launch.now ? { now: launch.now } : {}),
         });
       } else {
         const storageState = await savedLogin(db, stored.recording.authProfileId);
         result = await runRecording(stored.recording, {
-          ...options.run,
+          ...launch,
           ...robots,
           ...(storageState ? { storageState } : {}),
           artifactsDir: artifactsDirFor(options.dataDir, id),

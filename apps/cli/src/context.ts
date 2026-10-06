@@ -1,3 +1,4 @@
+import type { RunningServer, ServerOptions } from "@jobtrace/api";
 import type { Config } from "@jobtrace/core";
 import type { Database } from "@jobtrace/db";
 import type { Politeness } from "@jobtrace/politeness";
@@ -17,6 +18,9 @@ export interface MainIo {
   onSession?: RecordCommandIo["onSession"];
   /** Tests: a hook to drive a login capture. */
   onAuthCapture?: (capture: AuthCapture) => void;
+  /** Tests: server overrides, and a hook called once `serve` is listening. */
+  server?: Pick<ServerOptions, "port" | "worker" | "sessionHooks">;
+  onServer?: (server: RunningServer) => void;
 }
 
 /** What every command gets. Config, logger and database are created on first use. */

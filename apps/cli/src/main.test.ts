@@ -518,6 +518,94 @@ describe("saved logins and politeness", () => {
   });
 });
 
+describe("jobtrace serve", () => {
+  it("serves the API, executes queued runs, and shuts down on interrupt", async () => {
+    await fetch(sites.url(`${SITES.changing}__version/1`), { method: "POST" });
+    const file = join(dataDir, "queued.jobtrace.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 2,
+        id: "rec_queued",
+        name: "Queued board",
+        startUrl: sites.url(SITES.changing),
+        settings: { minDelayMs: 0, maxDelayMs: 0 },
+        steps: [
+          { id: "s1", type: "navigate", url: sites.url(SITES.changing) },
+          {
+            id: "s2",
+            type: "forEach",
+            items: { locators: [{ kind: "css", value: "li.job" }] },
+            body: [
+              {
+                id: "s3",
+                type: "extract",
+                scope: "item",
+                fields: [
+                  {
+                    name: "title",
+                    target: { locators: [{ kind: "css", value: ".title" }], relativeTo: "item" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    await cli(["recordings", "import", file]);
+
+    // Queued from the command line; nothing runs until a server is up.
+    const queued = await cli(["run", "Queued board", "--queue"]);
+    expect(queued.code).toBe(0);
+    const runId = queued.stdout.trim();
+    expect(runId).toMatch(/^run_/);
+    expect(queued.stderr).toMatch(
+      /Queued run run_\w+ of "Queued board"\. It starts when `jobtrace serve` is running/,
+    );
+    expect((await cli(["runs", "show", runId])).stdout).toContain("status     queued");
+
+    const controller = new AbortController();
+    let observed: Record<string, unknown> = {};
+    const served = await cli(["serve"], {
+      signal: controller.signal,
+      server: { port: 0, worker: { pollIntervalMs: 50 } },
+      onServer: (server) => {
+        void (async () => {
+          try {
+            const health = await (await fetch(`${server.url}/api/health`)).json();
+            await server.worker.idle();
+            const run = await (await fetch(`${server.url}/api/runs/${runId}`)).json();
+            const docs = await fetch(`${server.url}/api/docs/json`);
+            observed = { health, run, docs: docs.status, url: server.url };
+          } finally {
+            controller.abort();
+          }
+        })();
+      },
+    });
+    expect(served.code).toBe(0);
+    expect(served.stderr).toMatch(/JobTrace is listening on http:\/\/127\.0\.0\.1:\d+/);
+    expect(served.stderr).toContain("Stopping: cancelling running runs and closing.");
+    expect(observed.health).toMatchObject({ status: "ok" });
+    expect(observed.docs).toBe(200);
+    expect(observed.run).toMatchObject({
+      run: { status: "succeeded", trigger: "cli", stats: { jobs: 5 } },
+    });
+    // The port is released: the server really stopped.
+    await expect(fetch(`${observed.url}/api/health`)).rejects.toThrow();
+  }, 60_000);
+
+  it("refuses to listen beyond localhost without a token", async () => {
+    const result = await cli(["serve", "--host", "0.0.0.0"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(
+      /API_TOKEN is required when HOST \(0\.0\.0\.0\) is not a loopback address/,
+    );
+    expect((await cli(["serve", "--port", "0"])).code).toBe(1);
+  });
+});
+
 describe("API sources", () => {
   const baseUrl = (provider: "greenhouse" | "lever" | "ashby") => sites.url(ATS_PATHS[provider]);
   const setVersion = (version: number) =>

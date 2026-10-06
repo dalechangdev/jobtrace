@@ -8,6 +8,7 @@ export type {
   RecordingSummary,
   RecordingVersion,
   RunJobRecord,
+  RunLaunchOptions,
   RunOutcome,
   RunRecord,
   RunTrigger,

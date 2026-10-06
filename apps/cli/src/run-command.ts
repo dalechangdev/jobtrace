@@ -12,7 +12,7 @@ import {
 } from "@jobtrace/core";
 import type { StoredRecording } from "@jobtrace/db";
 import { runRecording } from "@jobtrace/runner";
-import { executeRun } from "@jobtrace/scheduler";
+import { createDbQueue, executeRun } from "@jobtrace/scheduler";
 import { fetchSource } from "@jobtrace/sources";
 import type { CliContext } from "./context.ts";
 
@@ -24,6 +24,7 @@ export interface RunCommandOptions {
   maxPages?: number;
   maxItems?: number;
   summary?: boolean;
+  queue?: boolean;
 }
 
 /** Exit codes: 0 succeeded, 2 partial (some jobs, some errors), 1 anything else. */
@@ -101,6 +102,22 @@ export async function runCommand(
   } catch (error) {
     if (!isJobTraceError(error, "NOT_FOUND")) throw error;
     throw new JobTraceError("NOT_FOUND", `${error.message}, and there is no such file either`);
+  }
+  if (options.queue) {
+    const run = await createDbQueue(ctx.db).enqueue({
+      recordingId: stored.id,
+      trigger: "cli",
+      params,
+      options: {
+        ...(options.headed ? { headed: true } : {}),
+        ...(options.trace ? { trace: true } : {}),
+      },
+    });
+    ctx.stderr.write(
+      `Queued run ${run.id} of "${stored.name}". It starts when \`jobtrace serve\` is running; follow it with: jobtrace runs show ${run.id}\n`,
+    );
+    ctx.stdout.write(`${run.id}\n`);
+    return 0;
   }
   if (options.artifacts) {
     throw new JobTraceError(

@@ -85,6 +85,8 @@ export const runs = sqliteTable(
     status: text("status").notNull(),
     reason: text("reason"),
     paramsJson: text("params_json").notNull().default("{}"),
+    /** How to run it (headed, trace); only meaningful until the run was executed. */
+    optionsJson: text("options_json").notNull().default("{}"),
     startedAt: text("started_at"),
     finishedAt: text("finished_at"),
     statsJson: text("stats_json"),

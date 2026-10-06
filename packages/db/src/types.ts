@@ -70,6 +70,7 @@ export interface RunRecord {
   status: RunStatus;
   reason: string | null;
   params: Record<string, string>;
+  options: RunLaunchOptions;
   startedAt: string | null;
   finishedAt: string | null;
   stats: StoredRunStats | null;
@@ -77,7 +78,14 @@ export interface RunRecord {
   createdAt: string;
 }
 
+/** How a queued run asked to be executed. */
+export interface RunLaunchOptions {
+  headed?: boolean;
+  trace?: boolean;
+}
+
 export interface NewRun {
+  options?: RunLaunchOptions;
   recordingId: string;
   recordingVersionId?: string | null;
   scheduleId?: string | null;
@@ -116,6 +124,8 @@ export interface JobFilter {
   newInLatestRun?: boolean;
   /** Only jobs first seen at or after this ISO timestamp. */
   since?: string;
+  /** Only jobs first seen before this ISO timestamp. */
+  until?: string;
   /** Full-text search over title, company, location and description. */
   search?: string;
   /** Closed jobs are left out unless this is set. */
@@ -156,7 +166,21 @@ export interface Database {
     get(id: string): Promise<RunRecord | null>;
     /** Finds a run by id or unique id prefix. Throws NOT_FOUND. */
     resolve(ref: string): Promise<RunRecord>;
-    list(filter?: { recordingId?: string; limit?: number }): Promise<RunRecord[]>;
+    list(filter?: {
+      recordingId?: string;
+      status?: RunStatus;
+      limit?: number;
+    }): Promise<RunRecord[]>;
+    /**
+     * Atomically takes the oldest queued run and marks it running. Runs whose
+     * site is in `busyDomains` are passed over, so one site's queue does not
+     * hold up the others. Returns null when there is nothing to take.
+     */
+    claimNext(busyDomains?: readonly string[]): Promise<RunRecord | null>;
+    /** Cancels a run that is still queued. Returns false when it is not queued (any more). */
+    cancelQueued(id: string): Promise<boolean>;
+    /** After a restart: marks runs left "running" as failed with reason `interrupted`. */
+    failInterrupted(): Promise<number>;
   };
   jobs: {
     /**

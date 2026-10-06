@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { startServer } from "@jobtrace/api";
 import { type Config, isJobTraceError, loadConfig } from "@jobtrace/core";
 import { type Database, openDatabase } from "@jobtrace/db";
 import { createPoliteness, type Politeness } from "@jobtrace/politeness";
@@ -121,6 +122,8 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
     .option("--max-pages <n>", "override the recording's maxPages", positiveInt)
     .option("--max-items <n>", "override the recording's maxItems", positiveInt)
     .option("--summary", "print status, stats and artifacts along with the jobs")
+    .option("--queue", "do not run now: queue the run for a running `jobtrace serve` to execute")
+    .option("--now", "run in this process right away (the default)")
     .action(async (ref: string, options) => {
       exitCode = await runCommand(ref, options, ctx);
     });
@@ -130,6 +133,37 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
   registerRecordings(program, ctx);
   registerRuns(program, ctx, positiveInt);
   registerJobs(program, ctx, positiveInt);
+
+  program
+    .command("serve")
+    .description("Run the HTTP API and the worker that executes queued runs")
+    .option("--port <port>", "port to listen on (default: PORT or 4317)", positiveInt)
+    .option("--host <host>", "address to bind (default: HOST or 127.0.0.1)")
+    .action(async (options: { port?: number; host?: string }) => {
+      // Flags override the environment; the result is validated as a whole.
+      const serveConfig = loadConfig({
+        ...env,
+        ...(options.port ? { PORT: String(options.port) } : {}),
+        ...(options.host ? { HOST: options.host } : {}),
+      });
+      await ctx.withInterrupt(async (signal) => {
+        const server = await startServer({
+          config: serveConfig,
+          logger: { level: serveConfig.logLevel, stream: stderr },
+          ...io.server,
+        });
+        stderr.write(
+          `JobTrace is listening on ${server.url}\n  API docs: ${server.url}/api/docs\n  Press Ctrl+C to stop.\n`,
+        );
+        io.onServer?.(server);
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        stderr.write("Stopping: cancelling running runs and closing.\n");
+        await server.close();
+      });
+    });
 
   program
     .command("db")

@@ -1,0 +1,1 @@
+ALTER TABLE `runs` ADD `options_json` text DEFAULT '{}' NOT NULL;
