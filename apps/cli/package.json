@@ -1,0 +1,19 @@
+{
+  "name": "@jobtrace/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "jobtrace": "./bin/jobtrace.js"
+  },
+  "dependencies": {
+    "@jobtrace/core": "workspace:*",
+    "@jobtrace/runner": "workspace:*",
+    "commander": "^15.0.0",
+    "pino": "^10.4.0"
+  },
+  "devDependencies": {
+    "@jobtrace/test-sites": "workspace:*"
+  }
+}

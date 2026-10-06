@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "id": "rec_example_static_list",
+  "name": "Acme Robotics – static list",
+  "startUrl": "http://127.0.0.1:4400/static-list/",
+  "params": {
+    "baseUrl": {
+      "default": "http://127.0.0.1:4400"
+    }
+  },
+  "settings": {
+    "company": "Acme Robotics",
+    "minDelayMs": 250,
+    "maxDelayMs": 750
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "type": "navigate",
+      "url": "{{params.baseUrl}}/static-list/"
+    },
+    {
+      "id": "s2",
+      "type": "forEach",
+      "items": {
+        "locators": [
+          {
+            "kind": "css",
+            "value": "li.job"
+          },
+          {
+            "kind": "role",
+            "role": "listitem"
+          },
+          {
+            "kind": "css",
+            "value": "ul[aria-label=\"Open positions\"] > li"
+          }
+        ]
+      },
+      "body": [
+        {
+          "id": "s3",
+          "type": "extract",
+          "scope": "item",
+          "fields": [
+            {
+              "name": "title",
+              "target": {
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": "h2.title"
+                  },
+                  {
+                    "kind": "role",
+                    "role": "heading"
+                  }
+                ],
+                "relativeTo": "item"
+              },
+              "transforms": ["trim"],
+              "required": true
+            },
+            {
+              "name": "location",
+              "target": {
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": ".loc"
+                  },
+                  {
+                    "kind": "xpath",
+                    "value": ".//p[1]/span[1]"
+                  }
+                ],
+                "relativeTo": "item"
+              }
+            },
+            {
+              "name": "employmentType",
+              "target": {
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": ".type"
+                  },
+                  {
+                    "kind": "xpath",
+                    "value": ".//p[1]/span[2]"
+                  }
+                ],
+                "relativeTo": "item"
+              }
+            },
+            {
+              "name": "salaryText",
+              "target": {
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": ".salary"
+                  },
+                  {
+                    "kind": "xpath",
+                    "value": ".//p[2]/span"
+                  }
+                ],
+                "relativeTo": "item"
+              }
+            },
+            {
+              "name": "postedAt",
+              "target": {
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": "time.posted"
+                  },
+                  {
+                    "kind": "xpath",
+                    "value": ".//time"
+                  }
+                ],
+                "relativeTo": "item"
+              },
+              "read": "attr",
+              "attr": "datetime"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

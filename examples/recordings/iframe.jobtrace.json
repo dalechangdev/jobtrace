@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "id": "rec_example_iframe",
+  "name": "Acme Robotics – board in an iframe",
+  "startUrl": "http://127.0.0.1:4400/iframe/",
+  "params": {
+    "baseUrl": {
+      "default": "http://127.0.0.1:4400"
+    }
+  },
+  "settings": {
+    "company": "Acme Robotics",
+    "minDelayMs": 250,
+    "maxDelayMs": 750
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "type": "navigate",
+      "url": "{{params.baseUrl}}/iframe/"
+    },
+    {
+      "id": "s2",
+      "type": "forEach",
+      "items": {
+        "locators": [
+          {
+            "kind": "css",
+            "value": "li.job"
+          },
+          {
+            "kind": "role",
+            "role": "listitem"
+          }
+        ],
+        "frame": ["#job-board"]
+      },
+      "body": [
+        {
+          "id": "s3",
+          "type": "extract",
+          "scope": "item",
+          "fields": [
+            {
+              "name": "title",
+              "target": {
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": "a.title"
+                  },
+                  {
+                    "kind": "role",
+                    "role": "link"
+                  }
+                ],
+                "relativeTo": "item"
+              },
+              "transforms": ["trim"],
+              "required": true
+            },
+            {
+              "name": "url",
+              "target": {
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": "a.title"
+                  },
+                  {
+                    "kind": "role",
+                    "role": "link"
+                  }
+                ],
+                "relativeTo": "item"
+              },
+              "read": "attr",
+              "attr": "href",
+              "transforms": ["absoluteUrl"]
+            },
+            {
+              "name": "location",
+              "target": {
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": ".loc"
+                  },
+                  {
+                    "kind": "xpath",
+                    "value": ".//p[1]/span[1]"
+                  }
+                ],
+                "relativeTo": "item"
+              }
+            },
+            {
+              "name": "employmentType",
+              "target": {
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": ".type"
+                  },
+                  {
+                    "kind": "xpath",
+                    "value": ".//p[1]/span[2]"
+                  }
+                ],
+                "relativeTo": "item"
+              }
+            },
+            {
+              "name": "salaryText",
+              "target": {
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": ".salary"
+                  },
+                  {
+                    "kind": "xpath",
+                    "value": ".//p[2]/span"
+                  }
+                ],
+                "relativeTo": "item"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

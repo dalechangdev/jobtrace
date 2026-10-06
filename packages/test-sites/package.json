@@ -1,0 +1,16 @@
+{
+  "name": "@jobtrace/test-sites",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "fastify": "^5.12.5"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@jobtrace/runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@jobtrace/core": "workspace:*",
+    "@jobtrace/extractor": "workspace:*",
+    "playwright": "^1.63.0"
+  },
+  "devDependencies": {
+    "@jobtrace/test-sites": "workspace:*"
+  }
+}
