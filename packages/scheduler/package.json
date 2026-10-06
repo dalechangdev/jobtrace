@@ -1,0 +1,19 @@
+{
+  "name": "@jobtrace/scheduler",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@jobtrace/core": "workspace:*",
+    "@jobtrace/db": "workspace:*",
+    "@jobtrace/runner": "workspace:*"
+  },
+  "devDependencies": {
+    "@jobtrace/test-sites": "workspace:*",
+    "playwright": "^1.63.0"
+  }
+}

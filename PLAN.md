@@ -399,6 +399,17 @@ Locator ranking prefers stable signals: test ids, then ARIA role and name, then 
 
 SQLite via `better-sqlite3` with WAL mode, Drizzle ORM, and Drizzle Kit migrations. All access goes through **repository modules** (`recordingsRepo`, `runsRepo`, `jobsRepo`, …) so a Postgres implementation can be added later without touching callers.
 
+### Decisions made while building M4
+- **Run execution lives in `packages/scheduler`** (`executeRun`): replay, then persist the run, events, jobs with flags, artifacts, closed jobs and retention. The CLI calls it now; the worker (M6) and cron (M8) will call the same function.
+- **Repository methods are async** even though SQLite is synchronous underneath, so a Postgres implementation can be dropped in. Each method is one transaction.
+- **Recording files stay one-off.** `jobtrace run <file>` replays without storing anything; `jobtrace run <id|name>` is tracked. `record` stores to the database unless `--out` is given.
+- **`run_events.id` is an auto-increment integer** (insertion order is the log order), not a ULID. `jobs` also has a `description_html` column.
+- **Stored run stats** add `newJobs`, `changedJobs` and `closedJobs` to the runner's stats.
+- **Full-text search** uses a plain FTS5 table keyed by job id with triggers, not an external-content table: `jobs` has a text primary key, and SQLite may renumber such a table's rowids on VACUUM.
+- **Retention** drops artifact files and rows for all but the newest N runs of a recording; runs and their event logs are kept.
+- **A job seen again after being closed is reopened**, and is not flagged new or changed for that.
+- **`better-sqlite3` is not compiled on install** (`pnpm.neverBuiltDependencies`); it ships prebuilt binaries for macOS, Linux and Windows.
+
 ### Tables
 - `recordings(id, name, start_url, domain, definition_json, schema_version, auth_profile_id, created_at, updated_at)`
 - `recording_versions(id, recording_id, definition_json, created_at, note)`: snapshot on every save, used for undo and diffs
@@ -500,6 +511,7 @@ Order rationale: the recording format and a replay engine come first, so the rec
   7. Job board embedded in an iframe
   8. Bot-wall page (fake challenge page and a 429 route)
   10. List split into department groups (added in M3, for list detection)
+  11. Board whose content changes between visits (added in M4, for new/changed/closed detection)
   9. "v2" of site 4 with changed class names but same structure and text (locator-drift test)
 - `CLAUDE.md`, `README.md` skeleton, `LICENSE` (MIT), `CONTRIBUTING.md`, `SECURITY.md`.
 - **Accept**: `pnpm test` passes in CI; `pnpm test-sites` serves all fixtures.

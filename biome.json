@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!**/__golden__", "!**/dist", "!**/coverage"]
+    "includes": ["**", "!**/__golden__", "!**/dist", "!**/coverage", "!**/migrations"]
   },
   "formatter": {
     "enabled": true,

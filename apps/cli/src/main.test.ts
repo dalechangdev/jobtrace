@@ -3,8 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { jobsFor, type RunningTestSites, startTestSites } from "@jobtrace/test-sites";
+import {
+  CHANGED_SALARY,
+  changingJobs,
+  jobsFor,
+  type RunningTestSites,
+  SITES,
+  startTestSites,
+} from "@jobtrace/test-sites";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { duration, outline, parseSince, table } from "./format.ts";
 import { type MainIo, main } from "./main.ts";
 import { defaultFileName, normalizeUrl } from "./record-command.ts";
 import { exitCodeFor, parseParams } from "./run-command.ts";
@@ -76,7 +84,7 @@ describe("jobtrace run", () => {
   it("exits 1 with a readable message for a missing or invalid recording", async () => {
     const missing = await cli(["run", join(dataDir, "nope.jobtrace.json")]);
     expect(missing).toMatchObject({ code: 1, stdout: "" });
-    expect(missing.stderr).toMatch(/Cannot read recording file/);
+    expect(missing.stderr).toMatch(/No recording matches .*no such file either/);
 
     const file = join(dataDir, "bad.jobtrace.json");
     writeFileSync(
@@ -169,18 +177,6 @@ describe("jobtrace record", () => {
     expect(JSON.parse(readFileSync(out, "utf8")).steps).toHaveLength(1);
   });
 
-  it("names the file after the recording and never overwrites without --out", async () => {
-    const run = () =>
-      cli(["record", sites.url("/static-list/")], {
-        recorder,
-        onSession: (session) => void session.stop(),
-      });
-    expect((await run()).stdout.trim()).toBe(join(dataDir, "jobs-at-acme-robotics.jobtrace.json"));
-    expect((await run()).stdout.trim()).toBe(
-      join(dataDir, "jobs-at-acme-robotics-2.jobtrace.json"),
-    );
-  });
-
   it("rejects URLs it cannot record", async () => {
     expect((await cli(["record", "ftp://example.com/jobs"])).stderr).toMatch(/Only http and https/);
     expect(normalizeUrl("careers.example.com/jobs")).toBe("https://careers.example.com/jobs");
@@ -192,7 +188,210 @@ describe("jobtrace record", () => {
   });
 });
 
+describe("stored recordings, tracked runs and jobs", () => {
+  const setVersion = (version: number) =>
+    fetch(sites.url(`${SITES.changing}__version/${version}`), { method: "POST" });
+  /** Records the changing board through the real recorder: a list with title, url and salary. */
+  const recordBoard: MainIo["onSession"] = (session) => {
+    void (async () => {
+      const { page } = session;
+      const ui = page.locator("#__jobtrace-overlay");
+      const press = (action: string) => ui.locator(`[data-action="${action}"]`).click();
+      const first = page.locator("li.job").first();
+      await press("list");
+      await first.locator(".loc").click();
+      await press("list-use");
+      await expect.poll(() => session.status().scope).toBe("list");
+      for (const [selector, name, read] of [
+        ["a.title", "title", "text"],
+        ["a.title", "url", "href"],
+        [".salary", "salaryText", "text"],
+      ] as const) {
+        await first.locator(selector).click();
+        await ui.locator('.dialog.open [data-role="name"]').selectOption(name);
+        await ui.locator('[data-role="read"]').selectOption(read);
+        await press("save");
+        await expect.poll(() => session.status().fields).toContain(name);
+      }
+      await press("stop");
+    })();
+  };
+  let recordingId = "";
+
+  it("record stores the recording and prints its id", async () => {
+    await setVersion(1);
+    const recorded = await cli(["record", sites.url(SITES.changing), "--name", "Changing board"], {
+      recorder: { headless: true, openShadow: true },
+      onSession: recordBoard,
+    });
+    expect(recorded.code).toBe(0);
+    recordingId = recorded.stdout.trim();
+    expect(recordingId).toMatch(/^rec_/);
+    expect(recorded.stderr).toContain(`Replay it with: jobtrace run ${recordingId}`);
+
+    const list = await cli(["recordings", "list"]);
+    expect(list.stdout).toMatch(/ID\s+NAME\s+SITE\s+OPEN JOBS\s+LAST RUN/);
+    expect(list.stdout).toMatch(
+      new RegExp(`${recordingId}\\s+Changing board\\s+127\\.0\\.0\\.1\\s+0\\s+never`),
+    );
+
+    const show = await cli(["recordings", "show", "changing board"]);
+    expect(show.stdout).toContain(`id         ${recordingId}`);
+    expect(show.stdout).toMatch(/s2 {2}forEach\n\s+s3 {2}extract {2}title, url, salaryText/);
+  });
+
+  it("run tracks new and changed jobs across runs", async () => {
+    const first = await cli(["run", "Changing board"]);
+    expect(first.code).toBe(0);
+    expect(first.stderr).toMatch(/Run run_\w+ succeeded: 5 job\(s\), 5 new, 0 changed, 0 closed/);
+    const firstJobs = JSON.parse(first.stdout) as Array<{
+      title: string;
+      isNew: boolean;
+      id: string;
+    }>;
+    expect(firstJobs.map((job) => job.title)).toEqual(changingJobs(1).map((job) => job.title));
+    expect(firstJobs.every((job) => job.isNew && job.id.startsWith("job_"))).toBe(true);
+
+    await setVersion(2);
+    const second = await cli(["run", recordingId.slice(0, 12), "--summary"]);
+    expect(second.stderr).toMatch(/5 job\(s\), 1 new, 1 changed, 0 closed/);
+    const summary = JSON.parse(second.stdout);
+    expect(summary.run).toMatchObject({
+      status: "succeeded",
+      trigger: "cli",
+      stats: { newJobs: 1, changedJobs: 1 },
+    });
+    const added = changingJobs(2).at(-1)?.title;
+    expect(
+      summary.jobs
+        .filter((job: { isNew: boolean }) => job.isNew)
+        .map((job: { title: string }) => job.title),
+    ).toEqual([added]);
+    expect(summary.jobs.find((job: { isChanged: boolean }) => job.isChanged)).toMatchObject({
+      salaryText: CHANGED_SALARY,
+    });
+
+    const fresh = await cli(["jobs", "list", "--new"]);
+    expect(fresh.stdout).toMatch(/FIRST SEEN\s+TITLE\s+COMPANY\s+LOCATION\s+URL/);
+    expect(fresh.stdout.trim().split("\n")).toHaveLength(2);
+    expect(fresh.stdout).toContain(added);
+    expect(fresh.stderr).toContain("1 of 1 job(s)");
+
+    const all = JSON.parse(
+      (await cli(["jobs", "list", "--recording", recordingId, "--json"])).stdout,
+    );
+    expect(all).toHaveLength(6);
+    const search = JSON.parse(
+      (await cli(["jobs", "list", "--search", "frontend", "--since", "1h", "--json"])).stdout,
+    );
+    expect(search.map((job: { title: string }) => job.title)).toEqual(["Frontend Engineer"]);
+    expect((await cli(["jobs", "list", "--search", "zzzzz"])).stderr).toContain("No jobs match");
+    expect((await cli(["jobs", "list", "--since", "soon"])).stderr).toMatch(/--since expects/);
+  });
+
+  it("runs list and show report what happened", async () => {
+    const list = await cli(["runs", "list", "--recording", recordingId]);
+    const rows = list.stdout.trim().split("\n");
+    expect(rows[0]).toMatch(/ID\s+RECORDING\s+STATUS\s+STARTED\s+TOOK\s+JOBS\s+NEW\s+CHANGED/);
+    expect(rows).toHaveLength(3);
+    // Newest first: the second run, with one new and one changed job.
+    expect(rows[1]).toMatch(/Changing board\s+succeeded\s+.*\s5\s+1\s+1$/);
+    const runId = rows[1]?.split(/\s+/)[0] ?? "";
+
+    const show = await cli(["runs", "show", runId, "--events"]);
+    expect(show.stdout).toContain("jobs       5 (1 new, 1 changed, 0 closed)");
+    expect(show.stdout).toMatch(/new\s+Site Reliability Engineer/);
+    expect(show.stdout).toMatch(/changed\s+Frontend Engineer/);
+    expect(show.stdout).toMatch(/info {2}\[s2\] Found 5 item\(s\)/);
+    const json = JSON.parse((await cli(["runs", "show", runId, "--json"])).stdout);
+    expect(json.jobs).toHaveLength(5);
+    expect(json).not.toHaveProperty("events");
+    expect((await cli(["runs", "show", "run_nope"])).stderr).toMatch(/No run matches/);
+  });
+
+  it("exports, imports and deletes recordings", async () => {
+    const exported = await cli(["recordings", "export", recordingId]);
+    const definition = JSON.parse(exported.stdout);
+    expect(definition).toMatchObject({ id: recordingId, name: "Changing board", schemaVersion: 1 });
+
+    const file = join(dataDir, "copy.jobtrace.json");
+    writeFileSync(file, JSON.stringify({ ...definition, id: "rec_copy", name: "Copy" }));
+    const imported = await cli(["recordings", "import", file]);
+    expect(imported.stdout.trim()).toBe("rec_copy");
+    expect(imported.stderr).toMatch(/Imported "Copy" \(3 steps\)/);
+    expect((await cli(["recordings", "import", file])).stderr).toMatch(/Updated "Copy"/);
+    expect((await cli(["recordings", "export", "Copy", "--out", file])).stderr).toMatch(
+      /already exists/,
+    );
+    expect((await cli(["recordings", "export", "Copy", "--out", file, "--force"])).code).toBe(0);
+    expect(JSON.parse(readFileSync(file, "utf8")).id).toBe("rec_copy");
+
+    const dryRun = await cli(["recordings", "delete", recordingId]);
+    expect(dryRun.code).toBe(1);
+    expect(dryRun.stderr).toMatch(
+      /would delete "Changing board" .*2 run\(s\) and 6 job\(s\)\. Nothing was deleted/,
+    );
+    const deleted = await cli(["recordings", "delete", recordingId, "--yes"]);
+    expect(deleted.code).toBe(0);
+    const remaining = JSON.parse((await cli(["recordings", "list", "--json"])).stdout);
+    expect(remaining.map((item: { id: string }) => item.id)).toEqual(["rec_copy"]);
+    expect((await cli(["jobs", "list", "--all"])).stderr).toContain("No jobs match");
+    expect((await cli(["runs", "list"])).stderr).toContain("No runs yet");
+    expect((await cli(["run", recordingId])).stderr).toMatch(/No recording matches/);
+  });
+
+  it("db migrate reports the database location", async () => {
+    const result = await cli(["db", "migrate"]);
+    expect(result).toMatchObject({ code: 0 });
+    expect(result.stderr).toContain(join(dataDir, "jobtrace.db"));
+  });
+});
+
 describe("helpers", () => {
+  it("formats tables, durations and outlines", () => {
+    expect(
+      table(
+        ["A", "LONG HEADER"],
+        [
+          ["x", 1],
+          ["longer value", null],
+        ],
+      ),
+    ).toBe("A             LONG HEADER\nx             1\nlonger value\n");
+    expect(table(["A"], [["multi\n  line   text"], ["y".repeat(60)]])).toBe(
+      `A\nmulti line text\n${"y".repeat(47)}…\n`,
+    );
+    expect([duration(250), duration(4200), duration(125_000), duration(null)]).toEqual([
+      "250ms",
+      "4s",
+      "2m05s",
+      "",
+    ]);
+    expect(
+      outline([
+        { id: "s1", type: "navigate", url: "https://x.example" },
+        {
+          id: "s2",
+          type: "paginate",
+          mode: "infiniteScroll",
+          body: [{ id: "s3", type: "press", key: "End" }],
+        },
+      ]),
+    ).toEqual([
+      "s1  navigate  https://x.example",
+      "s2  paginate  infiniteScroll",
+      "  s3  press  End",
+    ]);
+  });
+
+  it("parses --since spans and dates", () => {
+    const now = new Date("2026-10-06T12:00:00Z");
+    expect(parseSince("36h", now)).toBe("2026-10-05T00:00:00.000Z");
+    expect(parseSince("7d", now)).toBe("2026-09-29T12:00:00.000Z");
+    expect(parseSince("2w", now)).toBe("2026-09-22T12:00:00.000Z");
+    expect(parseSince("2026-10-01", now)).toBe("2026-10-01T00:00:00.000Z");
+    expect(() => parseSince("yesterday-ish", now)).toThrow(/--since expects/);
+  });
   it("maps statuses to exit codes", () => {
     expect([
       exitCodeFor("succeeded"),

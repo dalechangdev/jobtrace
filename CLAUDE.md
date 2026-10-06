@@ -11,8 +11,8 @@ silently diverging. Record agreed changes in `PLAN.md` itself.
 - [x] M1 — Recording format and replay engine
 - [x] M2 — Recorder: basic actions
 - [x] M3 — Recorder: lists, detail pages, pagination
-- [ ] M4 — Persistence  ← next
-- [ ] M4b — ATS API sources (Greenhouse, Lever, Ashby)
+- [x] M4 — Persistence
+- [ ] M4b — ATS API sources (Greenhouse, Lever, Ashby)  ← next
 - [ ] M5 — Auth profiles and politeness
 - [ ] M6 — API and worker
 - [ ] M7 — Web UI
@@ -32,10 +32,11 @@ A milestone is done when its acceptance criteria in `PLAN.md` pass, along with
 - `pnpm test -u` — also rewrite golden files (`packages/runner/src/__golden__`); review the diff
 - `pnpm exec vitest run packages/runner` — one package
 - `pnpm test-sites` — mock career sites on http://127.0.0.1:4400
-- `pnpm jobtrace run <file>` — replay a recording
-- `pnpm jobtrace record <url>` — open the headed recorder
+- `pnpm jobtrace <command>` — the CLI (`record`, `run`, `recordings`, `runs`, `jobs`, `db migrate`)
+- `pnpm db:migrate` — create or upgrade the database (also happens on first use)
+- `pnpm --filter @jobtrace/db generate` — generate a SQL migration after editing `packages/db/src/schema.ts`
 
-Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`, `pnpm db:migrate`.
+Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`.
 
 ## Layout
 
@@ -45,6 +46,11 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`, `pnpm db:migr
 - `packages/recorder` — `startRecording(options)` runs a session. `src/injected/` is the
   script that runs inside recorded pages (locator generator, event capture, overlay),
   bundled with esbuild at session start; `postprocess.ts` turns the raw capture into steps.
+- `packages/db` — Drizzle schema, SQL migrations (`migrations/`), and the `Database`
+  interface with its SQLite implementation. `openDatabase(url)` migrates on open.
+- `packages/scheduler` — `executeRun(db, recordingId, options)`: replay plus persistence
+  (run, events, jobs with new/changed flags, artifacts, closing, retention). The worker
+  and cron scheduling will be added here.
 - `packages/test-sites` — mock career sites; `src/data.ts` is the ground truth tests compare against
 - `apps/cli` — the `jobtrace` binary
 - `examples/recordings` — hand-written recordings for the mock sites, also used by tests
@@ -79,6 +85,13 @@ Not available yet (later milestones): `pnpm dev`, `pnpm test:e2e`, `pnpm db:migr
 - Recorder tests run headless with `openShadow: true` so they can click the overlay's
   buttons; drive the page with real input (`click`, `pressSequentially`), since scripted
   clicks and key presses are ignored on purpose.
+- All database access goes through the `Database` interface in `packages/db`; no SQL or
+  Drizzle outside that package. Methods are async and each is one transaction.
+- Never edit an applied migration; change `schema.ts` and generate a new one. Raw SQL
+  that Drizzle cannot express (the FTS table and its triggers) goes in a custom
+  migration (`drizzle-kit generate --custom`).
+- CLI commands live in `apps/cli/src/commands`, get a `CliContext`, print results on
+  stdout and messages on stderr, and take `--json` where they list things.
 - Tests never use real websites. Use the mock sites with `fastOptions()` from
   `packages/runner/src/testing.ts` (no delays, short waits, fixed clock).
 - No CAPTCHA solving, stealth plugins or fingerprint spoofing, ever.

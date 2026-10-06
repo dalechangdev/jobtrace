@@ -13,6 +13,8 @@ export const ERROR_CODES = [
   "AUTH_EXPIRED",
   "ROBOTS_DISALLOWED",
   "BOT_WALL",
+  "NOT_FOUND",
+  "INVALID_ARGUMENT",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

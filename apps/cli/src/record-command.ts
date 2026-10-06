@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { JobTraceError, RECORDING_FILE_EXTENSION } from "@jobtrace/core";
+import type { Database } from "@jobtrace/db";
 import { type RecorderOptions, type RecordingSession, startRecording } from "@jobtrace/recorder";
 import type { Logger } from "./logger.ts";
 
@@ -15,6 +16,8 @@ export interface RecordCommandIo {
   stdout: NodeJS.WritableStream;
   stderr: NodeJS.WritableStream;
   logger: Logger;
+  /** Where the recording is stored unless `--out` asks for a file. */
+  database: () => Database;
   signal?: AbortSignal;
   cwd?: string;
   /** Tests: run headless and drive the session from a script. */
@@ -52,8 +55,9 @@ export function defaultFileName(name: string): string {
 
 /**
  * `jobtrace record <url>`: opens a browser with the recorder toolbar, waits for
- * the user to press Stop (or Ctrl+C, or close the window), then writes the
- * recording file and prints its path on stdout.
+ * the user to press Stop (or Ctrl+C, or close the window), then stores the
+ * recording in the database and prints its id on stdout. With `--out` it is
+ * written to that file instead.
  */
 export async function recordCommand(
   input: string,
@@ -86,14 +90,15 @@ export async function recordCommand(
   io.onSession?.(session);
   const { recording, samples, warnings } = await session.finished;
 
-  let file = resolve(cwd, options.out ?? defaultFileName(recording.name));
-  if (!options.out && !options.force) {
-    // No explicit target: never overwrite, pick the next free name instead.
-    const base = file.slice(0, -RECORDING_FILE_EXTENSION.length);
-    for (let n = 2; existsSync(file); n++) file = `${base}-${n}${RECORDING_FILE_EXTENSION}`;
+  let saved: string;
+  if (options.out) {
+    saved = resolve(cwd, options.out);
+    await mkdir(dirname(saved), { recursive: true });
+    await writeFile(saved, `${JSON.stringify(recording, null, 2)}\n`);
+  } else {
+    await io.database().recordings.save(recording, "recorded");
+    saved = recording.id;
   }
-  await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(recording, null, 2)}\n`);
 
   const fields = Object.entries(samples);
   io.stderr.write(
@@ -109,7 +114,7 @@ export async function recordCommand(
       "warning: no fields were marked, so replaying this recording will not extract any jobs.\n",
     );
   }
-  io.stderr.write(`\nReplay it with: jobtrace run ${options.out ?? file}\n`);
-  io.stdout.write(`${file}\n`);
+  io.stderr.write(`\nReplay it with: jobtrace run ${options.out ?? recording.id}\n`);
+  io.stdout.write(`${saved}\n`);
   return 0;
 }

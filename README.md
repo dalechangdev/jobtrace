@@ -4,10 +4,11 @@ Record how you navigate a career website, then replay those steps to scrape its 
 listings: manually now, on a schedule later. Open source (MIT), run by developers from
 source.
 
-> **Status: early.** You can record a job board (its list, detail pages and
-> pagination) with `jobtrace record` and replay it with `jobtrace run` (milestones
-> M0–M3 of [PLAN.md](PLAN.md)). Results are printed as JSON; the database, web UI,
-> scheduler and ATS API sources are not built yet.
+> **Status: early.** You can record a job board with `jobtrace record`, replay it
+> with `jobtrace run`, and browse what it found, including which jobs are new or
+> changed since the last run (milestones M0–M4 of [PLAN.md](PLAN.md)). It is all
+> command-line for now: the web UI, scheduler, login support and ATS API sources are
+> not built yet.
 
 ## Quickstart
 
@@ -17,11 +18,44 @@ Requires Node.js 24 and pnpm.
 pnpm install
 pnpm --filter @jobtrace/runner exec playwright install chromium
 
-pnpm test-sites        # mock career sites on http://127.0.0.1:4400 (leave running)
-pnpm jobtrace run examples/recordings/list-detail.jobtrace.json
+pnpm test-sites                                        # mock career sites (leave running)
+pnpm jobtrace record http://127.0.0.1:4400/paginated/  # mark the list and fields, press Stop
+pnpm jobtrace run "Jobs at Acme Robotics – page 1"     # by name, id or id prefix
+pnpm jobtrace jobs list --new
 ```
 
-The jobs are printed as JSON on stdout; the run log goes to stderr.
+`run` prints the jobs as JSON on stdout and a one-line summary on stderr. Everything
+is stored in a SQLite database under `DATA_DIR` (default `~/.jobtrace`).
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `record <url>` | Record a board in a browser window and store the recording. |
+| `run <recording>` | Replay a stored recording and track its jobs. |
+| `recordings list` / `show` / `export` / `import` / `delete` | Manage stored recordings. `export` and `import` use `.jobtrace.json` files, which can be shared or kept in Git. |
+| `runs list` / `show <run>` | Past runs: status, counts, errors, artifacts; `show --events` prints the log. |
+| `jobs list` | Jobs found so far, newest first. Filters: `--new`, `--recording`, `--since 7d`, `--search text`, `--all`. |
+| `db migrate` | Create or upgrade the database (also happens automatically). |
+
+Recordings and runs can be referred to by id, by the first characters of the id, or
+(recordings) by name. Most listing commands take `--json`.
+
+### New, changed and closed jobs
+
+Each tracked run compares what it found with what earlier runs of the same recording
+found:
+
+- **new**: seen for the first time. `jobs list --new` shows the jobs that were new in
+  each recording's latest run.
+- **changed**: the title, location, salary, description or another field differs from
+  last time. The posting date is ignored, since "3 days ago" changes daily.
+- **closed**: missing from three successful runs in a row. Closed jobs are hidden
+  unless you pass `--all`, and reopen if they come back. Partial or failed runs never
+  close anything.
+
+Jobs are matched by their URL (without tracking parameters), or by title, company and
+location when there is no URL.
 
 ## `jobtrace record`
 
@@ -53,9 +87,9 @@ A typical session: open the board, **Mark list**, mark `title` and `url` (choose
 URL" for the latter), **Open detail**, mark `description`, **Back to list**, **Next
 page**, **Stop**.
 
-The recording is written to `--out`, or to `<name>.jobtrace.json` in the current
-directory, and its path is printed on stdout. An existing file is never overwritten
-unless you pass `--force`.
+The recording is stored in the database and its id is printed on stdout. With
+`--out <file>` it is written to that `.jobtrace.json` file instead; an existing file is
+never overwritten unless you pass `--force`.
 
 Things to know:
 
@@ -75,18 +109,25 @@ Things to know:
 ## `jobtrace run`
 
 ```
-jobtrace run <file> [--headed] [--trace] [--param key=value] [--artifacts <dir>]
-                    [--max-pages <n>] [--max-items <n>] [--summary]
+jobtrace run <recording> [--headed] [--trace] [--param key=value]
+                         [--max-pages <n>] [--max-items <n>] [--summary]
 ```
+
+`<recording>` is a stored recording, or a path to a `.jobtrace.json` file. A file is
+replayed as a one-off: its jobs are printed but nothing is stored or compared.
 
 | Option | Effect |
 |---|---|
 | `--headed` | Show the browser window instead of running headless. |
 | `--trace` | Save a Playwright trace; open it with `npx playwright show-trace <trace.zip>`. |
 | `--param key=value` | Set a param the recording declares. Repeatable. |
-| `--artifacts <dir>` | Where failure screenshots, DOM snapshots and traces go. Default: `DATA_DIR/artifacts/<run>`. |
+| `--artifacts <dir>` | For recording files: where failure screenshots, DOM snapshots and traces go. |
 | `--max-pages`, `--max-items` | Override the recording's limits for this run. |
-| `--summary` | Print status, stats and artifact paths along with the jobs. |
+| `--summary` | Print the run's status, stats and artifact paths along with the jobs. |
+
+Failure screenshots, DOM snapshots and traces are saved under
+`DATA_DIR/artifacts/<run>` and kept for a recording's newest 20 runs
+(`ARTIFACT_RETENTION_RUNS`).
 
 Exit code `0` means the run succeeded, `2` that it was partial (some jobs extracted,
 some errors), and `1` anything else. Ctrl+C cancels the run and prints what it had.

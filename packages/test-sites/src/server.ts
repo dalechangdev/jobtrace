@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
   COMPANY,
+  changingJobs,
   type FixtureJob,
   GROUPED_DEPARTMENTS,
   INFINITE_BATCH_SIZE,
@@ -33,6 +34,7 @@ export const SITES = {
   detailV2: "/detail-v2/",
   robotsDisallowed: "/disallowed/",
   grouped: "/grouped/",
+  changing: "/changing/",
 } as const;
 
 export const LOGIN_CREDENTIALS = { username: "demo", password: "correct-horse-battery" } as const;
@@ -327,6 +329,25 @@ ${jobList(jobsFor("login"))}`,
       reply,
       page({ title: `Jobs at ${COMPANY}`, body: `<h1>Open positions</h1>${sections}` }),
     );
+  });
+
+  // 11. A board whose content changes between visits, for new/changed/closed detection.
+  let changingVersion = 1;
+  app.get(SITES.changing, (_request, reply) =>
+    html(
+      reply,
+      page({
+        title: `Jobs at ${COMPANY}`,
+        body: `<h1>Open positions</h1>${jobList(changingJobs(changingVersion), {
+          href: (job) => `${SITES.detail}jobs/${job.id}`,
+        })}`,
+      }),
+    ),
+  );
+  // Test hook: switch the board to another version of its content.
+  app.post<{ Params: { version: string } }>(`${SITES.changing}__version/:version`, (request) => {
+    changingVersion = Number(request.params.version) || 1;
+    return { version: changingVersion };
   });
 
   // Disallowed by /robots.txt, for the robots_disallowed fixture.

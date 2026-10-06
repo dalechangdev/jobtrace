@@ -98,6 +98,24 @@ export const GROUPED_DEPARTMENTS: ReadonlyArray<{ name: string; jobs: readonly F
   { name: "Operations", jobs: ALL_JOBS.slice(7, 9) },
 ];
 
+/**
+ * Site 11 changes between visits. Version 2, compared with version 1: the
+ * second job has a new salary, the fifth is gone, and a sixth was added.
+ */
+export const CHANGED_SALARY = "€120,000 - €135,000 per year";
+export function changingJobs(version: number): FixtureJob[] {
+  const [first, second, third, fourth, fifth, sixth] = ALL_JOBS as [
+    FixtureJob,
+    FixtureJob,
+    FixtureJob,
+    FixtureJob,
+    FixtureJob,
+    FixtureJob,
+  ];
+  if (version <= 1) return [first, second, third, fourth, fifth];
+  return [first, { ...second, salary: CHANGED_SALARY }, third, fourth, sixth];
+}
+
 export function jobsFor(site: keyof typeof SITE_JOB_COUNTS): FixtureJob[] {
   return ALL_JOBS.slice(0, SITE_JOB_COUNTS[site]);
 }
