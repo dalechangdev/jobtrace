@@ -162,6 +162,7 @@ export function RecordingDetail() {
   const navigate = useNavigate();
   const client = useQueryClient();
   const detail = useQuery({ queryKey: ["recording", id], queryFn: () => api.recordings.get(id) });
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings.get });
   const versions = useQuery({
     queryKey: ["versions", id],
     queryFn: () => api.recordings.versions(id),
@@ -254,7 +255,7 @@ export function RecordingDetail() {
             >
               Run now
             </Button>
-            {!source && (
+            {!source && settings.data?.local && (
               <Button
                 disabled={dirty || run.isPending}
                 title="Run with a visible browser window on the server's computer"

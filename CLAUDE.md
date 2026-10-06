@@ -17,8 +17,8 @@ silently diverging. Record agreed changes in `PLAN.md` itself.
 - [x] M6 — API and worker
 - [x] M7 — Web UI
 - [x] M8 — Scheduler
-- [ ] M9 — Packaging and docs  ← next
-- [ ] M10 — AI fallback plugin
+- [x] M9 — Packaging and docs
+- [ ] M10 — AI fallback plugin  ← next
 
 A milestone is done when its acceptance criteria in `PLAN.md` pass, along with
 `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `README.md` covers anything user-facing.
@@ -38,6 +38,7 @@ A milestone is done when its acceptance criteria in `PLAN.md` pass, along with
 
 - `pnpm build:web` — build the web UI into `apps/web/dist`, which `jobtrace serve` serves
 - `pnpm test:e2e` — build the UI, then drive it in a browser against a real server
+- `docker compose --profile demo up -d --build` — the server in a container plus the mock sites; `docker compose down` stops it (data stays in the `jobtrace_jobtrace-data` volume)
 - `pnpm dev:web` — the UI with hot reload on :5173, proxying `/api` to a running `jobtrace serve`; `pnpm dev` starts both
 
 ## Layout
@@ -127,6 +128,11 @@ A milestone is done when its acceptance criteria in `PLAN.md` pass, along with
 - Time-based code is tested with Vitest fake timers (`vi.useFakeTimers`), as in
   `scheduler/src/schedules.test.ts`; never with real waits for a cron tick. Do not use
   fake timers in tests that drive a browser.
+- The Docker image's Playwright base tag (`docker/Dockerfile`) must match the
+  `playwright` version in the lockfile; bump them together.
+- Never have two processes on different sides of a Docker file-sharing boundary open
+  the same SQLite database. The host CLI talks to a containerized server through its
+  API (`--server`), not through its files.
 - Tests never use real websites. Use the mock sites with `fastOptions()` from
   `packages/runner/src/testing.ts` (no delays, short waits, fixed clock).
 - No CAPTCHA solving, stealth plugins or fingerprint spoofing, ever. Guards in

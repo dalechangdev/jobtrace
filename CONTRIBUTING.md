@@ -41,6 +41,12 @@ To work on the UI with hot reload, run `pnpm jobtrace serve` and `pnpm dev:web`
 - A new step type or field transform needs a schema, runner support, recorder
   support (if recordable), unit tests, and a fixture-based test.
 
+## Docker
+
+`docker compose --profile demo up -d --build` builds the image and starts the server on
+http://127.0.0.1:4317 together with the mock sites on :4400. The CI workflow does the
+same and then imports and runs an example recording.
+
 ## Mock career sites
 
 `pnpm test-sites` serves the fixture sites on http://127.0.0.1:4400. Their job data

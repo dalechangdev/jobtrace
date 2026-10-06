@@ -1,6 +1,7 @@
 import {
   ATS_PROVIDERS,
   apiSourceFeedUrl,
+  canOpenWindows,
   isApiSource,
   JobTraceError,
   newId,
@@ -227,6 +228,12 @@ export function recordingRoutes(app: App, ctx: RouteContext): void {
     async (request, reply) => {
       const stored = await found(request.params.id);
       const { params, headed, trace } = request.body;
+      if (headed && !canOpenWindows(ctx.config)) {
+        throw new JobTraceError(
+          "INVALID_ARGUMENT",
+          "This server cannot show a browser window, so runs here are always headless.",
+        );
+      }
       const run = await ctx.queue.enqueue({
         recordingId: stored.id,
         trigger: "manual",

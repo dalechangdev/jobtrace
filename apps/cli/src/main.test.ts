@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { type RunningServer, startServer } from "@jobtrace/api";
+import { loadConfig } from "@jobtrace/core";
+import { type Database, openDatabase } from "@jobtrace/db";
 import {
   ATS_PATHS,
   CHANGED_SALARY,
@@ -698,6 +701,164 @@ describe("jobtrace schedule", () => {
     });
     expect(registered).toEqual([id]);
   }, 30_000);
+});
+
+describe("sending results to a server without a screen", () => {
+  let remote: RunningServer;
+  let remoteDir: string;
+  let remoteDb: Database;
+  const recorder = { headless: true, openShadow: true };
+  const ui = (page: Page) => page.locator("#__jobtrace-overlay");
+
+  beforeAll(async () => {
+    // A second JobTrace with its own data, configured as the container is.
+    remoteDir = mkdtempSync(join(tmpdir(), "jobtrace-remote-"));
+    remoteDb = openDatabase(":memory:");
+    remote = await startServer({
+      config: loadConfig({
+        DATA_DIR: remoteDir,
+        HOST: "0.0.0.0",
+        ALLOWED_HOSTS: "localhost,127.0.0.1",
+        HEADLESS_ONLY: "true",
+      }),
+      db: remoteDb,
+      port: 0,
+      listenHost: "127.0.0.1",
+      worker: { pollIntervalMs: 50, run: { settings: { minDelayMs: 0, maxDelayMs: 0 } } },
+    });
+  });
+  afterAll(async () => {
+    await remote?.close();
+    remoteDb?.close();
+    rmSync(remoteDir, { recursive: true, force: true });
+  });
+
+  it("auth create --server logs in here and sends the session there", async () => {
+    const created = await cli(
+      [
+        "auth",
+        "create",
+        "Remote intranet",
+        "--url",
+        sites.url(`${SITES.login}signin`),
+        "--server",
+        remote.url,
+      ],
+      {
+        recorder,
+        onAuthCapture: (capture) => {
+          void (async () => {
+            const { page } = capture;
+            await page.locator('input[name="username"]').fill(LOGIN_CREDENTIALS.username);
+            await page.locator('input[name="password"]').fill(LOGIN_CREDENTIALS.password);
+            await page.getByRole("button", { name: "Sign in" }).click();
+            await page.getByTestId("signed-in").waitFor();
+            await ui(page).locator('[data-action="auth-save"]').click();
+          })();
+        },
+      },
+    );
+    expect(created.code).toBe(0);
+    const id = created.stdout.trim();
+    expect(created.stderr).toContain(`Sent the login "Remote intranet" to ${remote.url}.`);
+
+    const [profile] = await remoteDb.authProfiles.list();
+    expect(profile).toMatchObject({ id, name: "Remote intranet", domain: "127.0.0.1" });
+    expect(profile?.storageStatePath).toBe(join(remoteDir, "auth", `${id}.json`));
+    expect(statSync(profile?.storageStatePath ?? "").mode & 0o777).toBe(0o600);
+    expect(readFileSync(profile?.storageStatePath ?? "", "utf8")).toContain("jobtrace_session");
+    // The server lists the profile but never hands the session back.
+    const listed = await (await fetch(`${remote.url}/api/auth-profiles`)).text();
+    expect(listed).toContain("Remote intranet");
+    expect(listed).not.toMatch(/jobtrace_session|storageState/);
+  });
+
+  it("record --server stores the recording there, where it then runs with the sent login", async () => {
+    const recorded = await cli(
+      [
+        "record",
+        sites.url(SITES.login),
+        "--auth",
+        "Remote intranet",
+        "--name",
+        "Remote board",
+        "--server",
+        remote.url,
+      ],
+      {
+        recorder,
+        onSession: (session) => {
+          void (async () => {
+            const { page } = session;
+            const press = (action: string) => ui(page).locator(`[data-action="${action}"]`).click();
+            await page.locator("li.job").first().waitFor();
+            await press("auth-check");
+            await page.getByTestId("signed-in").click();
+            await expect.poll(() => session.status().auth).toEqual({ hasCheck: true });
+            await press("list");
+            await page.locator("li.job .loc").first().click();
+            await press("list-use");
+            await expect.poll(() => session.status().scope).toBe("list");
+            await page.locator("li.job .title").first().click();
+            await press("save");
+            await expect.poll(() => session.status().fields).toEqual(["title"]);
+            await press("stop");
+          })();
+        },
+      },
+    );
+    expect(recorded.code).toBe(0);
+    const id = recorded.stdout.trim();
+    expect(recorded.stderr).toContain(
+      `Stored on ${remote.url}. Run it from there: ${remote.url}/recordings/${id}`,
+    );
+    // Not stored on this side.
+    expect((await cli(["recordings", "show", id])).stderr).toMatch(/No recording matches/);
+    expect((await remoteDb.recordings.get(id))?.name).toBe("Remote board");
+
+    const queued = await (
+      await fetch(`${remote.url}/api/recordings/${id}/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      })
+    ).json();
+    await remote.worker.idle();
+    expect(await remoteDb.runs.get(queued.id)).toMatchObject({
+      status: "succeeded",
+      stats: { jobs: 5 },
+    });
+    expect((await remoteDb.authProfiles.list())[0]?.lastVerifiedAt).not.toBeNull();
+  }, 60_000);
+
+  it("auth push resends a login, and problems reaching the server are reported plainly", async () => {
+    const pushed = await cli(["auth", "push", "Remote intranet"], {
+      env: { DATA_DIR: dataDir, LOG_LEVEL: "info", JOBTRACE_SERVER: remote.url },
+    });
+    expect(pushed.code).toBe(0);
+    expect(pushed.stderr).toContain("Sent the login");
+    expect((await cli(["auth", "push", "Remote intranet"])).stderr).toMatch(/Say which server/);
+    expect(
+      (await cli(["auth", "push", "Remote intranet", "--server", "not a url"])).stderr,
+    ).toMatch(/not a valid server address/);
+    expect(
+      (await cli(["auth", "push", "Remote intranet", "--server", "http://127.0.0.1:9"])).stderr,
+    ).toMatch(/Could not reach the JobTrace server at http:\/\/127\.0\.0\.1:9\. Is it running\?/);
+    // The server will not open windows itself, and says where to do it instead.
+    const refused = await fetch(`${remote.url}/api/recordings/record`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: sites.url("/") }),
+    });
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).error.message).toMatch(/runs in a container.*--server/);
+    const headed = await fetch(`${remote.url}/api/recordings/rec_x/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ headed: true }),
+    });
+    expect(headed.status).toBe(404);
+  });
 });
 
 describe("API sources", () => {

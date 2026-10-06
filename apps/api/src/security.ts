@@ -26,11 +26,16 @@ const deny = (reply: FastifyReply, status: number, code: string, message: string
  *  - When an API token is configured, every /api route except /api/health needs it.
  */
 export function registerSecurity(app: FastifyInstance, config: Config): void {
+  // Bound to loopback: only loopback names are legitimate. Bound wider but
+  // published locally (ALLOWED_HOSTS): only the listed names are.
   const loopback = isLoopbackHost(config.host);
+  const restricted = loopback || config.allowedHosts.length > 0;
+  const allowed = (host: string) =>
+    loopback ? isLoopbackHost(host) : config.allowedHosts.includes(host);
 
   app.addHook("onRequest", async (request: FastifyRequest, reply: FastifyReply) => {
     const host = hostOnly(request.headers.host ?? "");
-    if (loopback && !isLoopbackHost(host)) {
+    if (restricted && !allowed(host)) {
       return deny(
         reply,
         403,

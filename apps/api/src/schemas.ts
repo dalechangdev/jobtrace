@@ -188,7 +188,7 @@ export const settingsViewSchema = runtimeSettingsSchema.extend({
   /** Whether ANTHROPIC_API_KEY is set in the server's environment. Never the key itself. */
   aiFallbackKeyConfigured: z.boolean(),
   dataDir: z.string(),
-  /** False when the server is reachable from other machines (windows cannot be opened then). */
+  /** Whether the server can open browser windows on the user's screen (false in a container or on another machine). */
   local: z.boolean(),
 });
 

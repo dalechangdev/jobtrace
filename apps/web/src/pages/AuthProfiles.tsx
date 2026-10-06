@@ -69,8 +69,9 @@ export function AuthProfiles() {
       <div className="mb-4 space-y-3">
         {settings.data && !settings.data.local && (
           <Note tone="amber">
-            This server is not running on your own computer, so it cannot open a login window. Use
-            the jobtrace command line on the server instead.
+            This server cannot open a browser window on your screen (it runs in a container or on
+            another machine). Create the login on your own computer with the jobtrace command line
+            and send it here with --server.
           </Note>
         )}
         {notice && <Note>{notice}</Note>}

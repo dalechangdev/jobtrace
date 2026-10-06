@@ -47,8 +47,9 @@ function RecordForm({ onStarted }: { onStarted: (session: ApiSession) => void })
     <form className="space-y-3" onSubmit={submit}>
       {settings.data && !settings.data.local && (
         <Note tone="amber">
-          This server is not running on your own computer, so it cannot open a recorder window for
-          you. Record with the jobtrace command line instead.
+          This server cannot open a browser window on your screen (it runs in a container or on
+          another machine). Record on your own computer with the jobtrace command line and send the
+          result here with --server.
         </Note>
       )}
       <Field label="Career page address" hint="The page that lists the jobs.">

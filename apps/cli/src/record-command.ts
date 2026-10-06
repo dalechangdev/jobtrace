@@ -5,11 +5,14 @@ import { JobTraceError, RECORDING_FILE_EXTENSION } from "@jobtrace/core";
 import type { Database } from "@jobtrace/db";
 import { type RecorderOptions, type RecordingSession, startRecording } from "@jobtrace/recorder";
 import type { Logger } from "./logger.ts";
+import type { Remote } from "./remote.ts";
 
 export interface RecordCommandOptions {
   name?: string;
   /** Name or id of an auth profile to record with. */
   auth?: string;
+  /** Address of a JobTrace server to store the recording on, instead of here. */
+  server?: string;
   out?: string;
   force?: boolean;
 }
@@ -20,6 +23,8 @@ export interface RecordCommandIo {
   logger: Logger;
   /** Where the recording is stored unless `--out` asks for a file. */
   database: () => Database;
+  /** The server named by --server or JOBTRACE_SERVER, if any. */
+  remote?: Remote | null;
   signal?: AbortSignal;
   cwd?: string;
   /** Tests: run headless and drive the session from a script. */
@@ -109,6 +114,9 @@ export async function recordCommand(
     saved = resolve(cwd, options.out);
     await mkdir(dirname(saved), { recursive: true });
     await writeFile(saved, `${JSON.stringify(recording, null, 2)}\n`);
+  } else if (io.remote) {
+    await io.remote.send("POST", "/api/recordings", recording);
+    saved = recording.id;
   } else {
     await io.database().recordings.save(recording, "recorded");
     saved = recording.id;
@@ -133,7 +141,11 @@ export async function recordCommand(
       "warning: no fields were marked, so replaying this recording will not extract any jobs.\n",
     );
   }
-  io.stderr.write(`\nReplay it with: jobtrace run ${options.out ?? recording.id}\n`);
+  io.stderr.write(
+    io.remote && !options.out
+      ? `\nStored on ${io.remote.url}. Run it from there: ${io.remote.url}/recordings/${recording.id}\n`
+      : `\nReplay it with: jobtrace run ${options.out ?? recording.id}\n`,
+  );
   io.stdout.write(`${saved}\n`);
   return 0;
 }

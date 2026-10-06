@@ -1,4 +1,4 @@
-import { isLoopbackHost } from "@jobtrace/core";
+import { canOpenWindows } from "@jobtrace/core";
 import type { App, RouteContext } from "../deps.ts";
 import { runtimeSettingsSchema } from "../runtime.ts";
 import { errorSchema, settingsViewSchema } from "../schemas.ts";
@@ -9,7 +9,7 @@ export function settingsRoutes(app: App, ctx: RouteContext): void {
     ...ctx.runtime.current,
     aiFallbackKeyConfigured: Boolean(ctx.config.aiFallback.apiKey),
     dataDir: ctx.config.dataDir,
-    local: isLoopbackHost(ctx.config.host),
+    local: canOpenWindows(ctx.config),
   });
 
   app.get(

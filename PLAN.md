@@ -622,6 +622,13 @@ Order rationale: the recording format and a replay engine come first, so the rec
 - README: quickstart, concepts, recording guide, responsible-use, troubleshooting (locator drift, blocked runs).
 - **Accept**: fresh clone → `docker compose up` → UI reachable → import an example recording → run succeeds against the bundled test sites.
 
+**Decisions made while building M9**
+- **The container's data is a Docker volume, not a folder shared with the host, and the host CLI does not open the container's database.** The plan had recording on the host and the server in the container working "against the same data volume". On macOS and Windows that volume would be shared through Docker's file sharing, and SQLite (in WAL mode especially) is not safe when a process on the host and one in the container open the same database across that boundary. Instead the host CLI sends results to the server over its API: `jobtrace record … --server <url>`, `jobtrace auth create|refresh|push … --server <url>` (or `JOBTRACE_SERVER`). A new route, `PUT /api/auth-profiles/:id/session`, receives a login captured elsewhere; sessions can be sent, never read back.
+- **`ALLOWED_HOSTS` and `HEADLESS_ONLY`.** Inside a container the server must listen on `0.0.0.0` to be reachable through a published port. Rather than demand an API token for what is still a localhost-only service, `ALLOWED_HOSTS=localhost,127.0.0.1` keeps the localhost guarantees (requests must be addressed to a localhost name) and the compose file publishes on `127.0.0.1` only. Any non-localhost name in that list requires `API_TOKEN` again. `HEADLESS_ONLY` tells the server it has no screen: recorder and login windows and headed runs are refused with a pointer to `--server`.
+- **The mock career sites are a `demo` profile** of the compose file (`docker compose --profile demo up`), not part of a plain `docker compose up`. They share the server's network namespace, so the example recordings' `http://127.0.0.1:4400` works unchanged both for the server and in the user's browser.
+- The image is the official Playwright image (which already carries Node 24), runs as its non-root `pwuser`, and builds the web UI in a separate stage. CI builds the image and runs the acceptance flow against it.
+- `.env` in the current directory is loaded by the CLI entry point (Section 16).
+
 ### M10 — AI fallback plugin
 - Implement Section 12, settings toggle, suggestion acceptance in UI.
 - Tests use a mocked Claude client; one optional live test gated behind an env var.

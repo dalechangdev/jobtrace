@@ -28,6 +28,8 @@ export interface CliContext {
   stdout: NodeJS.WritableStream;
   stderr: NodeJS.WritableStream & { isTTY?: boolean };
   cwd: string;
+  /** The environment the CLI was started with. */
+  env: Record<string, string | undefined>;
   io: MainIo;
   readonly config: Config;
   readonly logger: Logger;

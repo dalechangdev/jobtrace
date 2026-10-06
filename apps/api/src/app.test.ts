@@ -877,6 +877,65 @@ describe("security and documentation", () => {
     expect(() => loadConfig({ HOST: "0.0.0.0" })).toThrow(/API_TOKEN is required/);
   });
 
+  it("configured as in Docker: answers to localhost names only, without a token, and opens no windows", async () => {
+    await server.close();
+    await start({ HOST: "0.0.0.0", ALLOWED_HOSTS: "localhost,127.0.0.1", HEADLESS_ONLY: "true" });
+    expect((await api("GET", "/api/recordings")).status).toBe(200);
+    expect(
+      (await api("GET", "/api/recordings", undefined, { host: "127.0.0.1:4317" })).status,
+    ).toBe(200);
+    expect((await api("GET", "/api/recordings", undefined, { host: "evil.example" })).status).toBe(
+      403,
+    );
+    expect((await api("GET", "/api/recordings", undefined, { host: "[::1]:4317" })).status).toBe(
+      403,
+    );
+    expect((await api("GET", "/api/settings")).body.local).toBe(false);
+
+    const id = await createBoard();
+    const headed = await api("POST", `/api/recordings/${id}/runs`, { headed: true });
+    expect(headed.status).toBe(400);
+    expect(headed.body.error.message).toMatch(/cannot show a browser window/);
+    expect((await api("POST", `/api/recordings/${id}/runs`, {})).status).toBe(202);
+    await server.worker.idle();
+
+    const login = await api("POST", "/api/auth-profiles", { name: "x", url: sites.url("/") });
+    expect(login.body.error.message).toMatch(/runs in a container/);
+    // A login captured elsewhere can be sent in; ids are checked since they name a file.
+    const state = { cookies: [{ name: "sid", value: "abc" }], origins: [] };
+    const sent = await api("PUT", "/api/auth-profiles/auth_01ABC/session", {
+      name: "Sent",
+      domain: "x.example",
+      storageState: state,
+    });
+    expect(sent.body).toEqual({
+      id: "auth_01ABC",
+      name: "Sent",
+      domain: "x.example",
+      createdAt: expect.any(String),
+      lastVerifiedAt: null,
+      usedBy: 0,
+    });
+    expect(
+      (
+        await api("PUT", "/api/auth-profiles/..%2Fescape/session", {
+          name: "x",
+          domain: "x",
+          storageState: state,
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await api("PUT", "/api/auth-profiles/auth_01ABC/session", {
+          name: "x",
+          domain: "x",
+          storageState: {},
+        })
+      ).status,
+    ).toBe(400);
+  });
+
   it("publishes an OpenAPI description of every route", async () => {
     const spec = (await api("GET", "/api/docs/json")).body;
     expect(spec.info.title).toBe("JobTrace API");

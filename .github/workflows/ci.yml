@@ -34,3 +34,31 @@ jobs:
         run: pnpm --filter @jobtrace/runner exec playwright install-deps chromium
       - run: pnpm test
       - run: pnpm test:e2e
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker compose build
+      - name: Start it and wait until it is healthy
+        run: |
+          docker compose --profile demo up -d
+          for attempt in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:4317/api/health && exit 0
+            sleep 2
+          done
+          docker compose logs
+          exit 1
+      - name: Import an example recording and run it against the bundled mock sites
+        run: |
+          id=$(curl -fsS -X POST http://127.0.0.1:4317/api/recordings -H 'content-type: application/json' \
+            --data @examples/recordings/list-detail.jobtrace.json | jq -r .id)
+          run=$(curl -fsS -X POST "http://127.0.0.1:4317/api/recordings/$id/runs" -H 'content-type: application/json' -d '{}' | jq -r .id)
+          for attempt in $(seq 1 60); do
+            status=$(curl -fsS "http://127.0.0.1:4317/api/runs/$run" | jq -r .run.status)
+            case "$status" in queued|running) sleep 2 ;; *) break ;; esac
+          done
+          echo "run status: $status"
+          test "$status" = succeeded
+          test "$(curl -fsS "http://127.0.0.1:4317/api/runs/$run" | jq '.jobs | length')" = 8

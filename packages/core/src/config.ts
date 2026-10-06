@@ -24,6 +24,8 @@ const envSchema = z.object({
   HOST: z.preprocess(blankToUndefined, z.string().default("127.0.0.1")),
   PORT: intWithDefault(4317, 1),
   API_TOKEN: optionalString,
+  ALLOWED_HOSTS: optionalString,
+  HEADLESS_ONLY: boolWithDefault(false),
   MAX_CONCURRENT_RUNS: intWithDefault(2, 1),
   DEFAULT_MIN_DELAY_MS: intWithDefault(1000),
   DEFAULT_MAX_DELAY_MS: intWithDefault(3000),
@@ -44,6 +46,13 @@ export interface Config {
   host: string;
   port: number;
   apiToken: string | undefined;
+  /**
+   * Host names the server answers to, when it is bound to all interfaces but
+   * only published locally (as in Docker). Empty means "not restricted this way".
+   */
+  allowedHosts: string[];
+  /** True where there is no screen (a container): browser windows cannot be opened. */
+  headlessOnly: boolean;
   maxConcurrentRuns: number;
   defaultMinDelayMs: number;
   defaultMaxDelayMs: number;
@@ -59,6 +68,14 @@ export interface Config {
 
 export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_HOSTS.has(host.toLowerCase());
+}
+
+/**
+ * Whether the server can show a browser window to the person using it: it is
+ * on their own computer (bound to loopback) and that computer has a screen.
+ */
+export function canOpenWindows(config: Pick<Config, "host" | "headlessOnly">): boolean {
+  return isLoopbackHost(config.host) && !config.headlessOnly;
 }
 
 function expandPath(path: string, cwd: string): string {
@@ -88,10 +105,18 @@ export function loadConfig(
       "DEFAULT_MIN_DELAY_MS must not exceed DEFAULT_MAX_DELAY_MS",
     );
   }
-  if (!isLoopbackHost(values.HOST) && !values.API_TOKEN) {
+  const allowedHosts = (values.ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  // Reachable from other machines unless it only answers to loopback names,
+  // which is the case for a container published on 127.0.0.1.
+  const localOnly =
+    isLoopbackHost(values.HOST) || (allowedHosts.length > 0 && allowedHosts.every(isLoopbackHost));
+  if (!localOnly && !values.API_TOKEN) {
     throw new JobTraceError(
       "INVALID_CONFIG",
-      `API_TOKEN is required when HOST (${values.HOST}) is not a loopback address`,
+      `API_TOKEN is required when HOST (${values.HOST}) is not a loopback address, unless ALLOWED_HOSTS limits the server to localhost names`,
     );
   }
   const dataDir = expandPath(values.DATA_DIR ?? "~/.jobtrace", cwd);
@@ -101,6 +126,8 @@ export function loadConfig(
     host: values.HOST,
     port: values.PORT,
     apiToken: values.API_TOKEN,
+    allowedHosts,
+    headlessOnly: values.HEADLESS_ONLY,
     maxConcurrentRuns: values.MAX_CONCURRENT_RUNS,
     defaultMinDelayMs: values.DEFAULT_MIN_DELAY_MS,
     defaultMaxDelayMs: values.DEFAULT_MAX_DELAY_MS,

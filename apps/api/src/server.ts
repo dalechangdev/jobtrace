@@ -89,7 +89,8 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       ...(options.worker?.run ? { testRun: options.worker.run } : {}),
       ...(options.sessionHooks ? { sessionHooks: options.sessionHooks } : {}),
     },
-    { logger: options.logger ?? false },
+    // One log line per request would drown everything else: the UI polls.
+    { logger: options.logger ?? false, disableRequestLogging: true },
   );
 
   await worker.start();
@@ -101,7 +102,9 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
   const host = bindHost.includes(":") && !bindHost.startsWith("[") ? `[${bindHost}]` : bindHost;
   if (!isLoopbackHost(config.host)) {
     app.log.warn(
-      `Listening on ${config.host}, reachable from other machines. Every request must carry the API token.`,
+      config.apiToken
+        ? `Listening on ${config.host}, reachable from other machines. Every request must carry the API token.`
+        : `Listening on ${config.host} but answering only to ${config.allowedHosts.join(", ")}. This is safe only while the port is published on this computer alone (127.0.0.1), as in the provided docker-compose.yml.`,
     );
   }
   const running = worker;
@@ -110,7 +113,8 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     worker: running,
     scheduler,
     db,
-    url: `http://${host}:${port}`,
+    // 0.0.0.0 is where it listens, not an address to open in a browser.
+    url: `http://${bindHost === "0.0.0.0" ? "127.0.0.1" : host}:${port}`,
     async close() {
       scheduler.stop();
       await sessions.closeAll();

@@ -1,0 +1,13 @@
+.git
+.github
+**/node_modules
+apps/web/dist
+coverage
+data
+.jobtrace
+*.db
+*.db-shm
+*.db-wal
+test-results
+.env
+.env.*

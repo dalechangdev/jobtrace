@@ -13,6 +13,7 @@ import { registerSource } from "./commands/source.ts";
 import type { CliContext, MainIo } from "./context.ts";
 import { createLogger, type Logger } from "./logger.ts";
 import { recordCommand } from "./record-command.ts";
+import { remoteFrom } from "./remote.ts";
 import { runCommand } from "./run-command.ts";
 
 export type { MainIo } from "./context.ts";
@@ -41,6 +42,7 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
   const ctx: CliContext = {
     stdout,
     stderr,
+    env,
     io,
     cwd: io.cwd ?? process.cwd(),
     get config() {
@@ -92,6 +94,10 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
       "--auth <profile>",
       "record while logged in with a saved login (see: jobtrace auth create)",
     )
+    .option(
+      "--server <url>",
+      "store the recording on a JobTrace server (e.g. one in Docker) instead of here",
+    )
     .option("--out <file>", "write a .jobtrace.json file instead of storing the recording")
     .option("--force", "with --out: overwrite the file if it exists")
     .action(async (url: string, options) => {
@@ -101,6 +107,7 @@ export async function main(argv: readonly string[], io: MainIo = {}): Promise<nu
           stderr,
           logger: ctx.logger,
           database: () => ctx.db,
+          remote: remoteFrom(options.server, env),
           signal,
           cwd: ctx.cwd,
           ...(io.recorder ? { recorder: io.recorder } : {}),

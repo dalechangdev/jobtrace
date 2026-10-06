@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { isLoopbackHost, loadConfig } from "./config.ts";
+import { canOpenWindows, isLoopbackHost, loadConfig } from "./config.ts";
 import { isJobTraceError, JobTraceError, toJobTraceError } from "./errors.ts";
 import { newId, ulid } from "./ids.ts";
 import { paramValues, renderTemplate, resolveParams } from "./templating.ts";
@@ -98,6 +98,32 @@ describe("config", () => {
     expect(() => loadConfig({ HOST: "0.0.0.0" })).toThrow(/API_TOKEN is required/);
     expect(loadConfig({ HOST: "0.0.0.0", API_TOKEN: "secret" }).apiToken).toBe("secret");
     expect(isLoopbackHost("LOCALHOST")).toBe(true);
+  });
+
+  it("lets a container listen on all interfaces without a token when it only answers to localhost", () => {
+    const docker = loadConfig({
+      HOST: "0.0.0.0",
+      ALLOWED_HOSTS: " localhost, 127.0.0.1 ",
+      HEADLESS_ONLY: "true",
+    });
+    expect(docker).toMatchObject({
+      allowedHosts: ["localhost", "127.0.0.1"],
+      headlessOnly: true,
+      apiToken: undefined,
+    });
+    // No screen there, so no browser windows, even though it is "local".
+    expect(canOpenWindows(docker)).toBe(false);
+    expect(canOpenWindows(loadConfig({}))).toBe(true);
+    expect(canOpenWindows(loadConfig({ HOST: "0.0.0.0", API_TOKEN: "x" }))).toBe(false);
+    // A public name in the list means it is exposed after all: the token is required again.
+    expect(() =>
+      loadConfig({ HOST: "0.0.0.0", ALLOWED_HOSTS: "localhost,jobs.example.com" }),
+    ).toThrow(/API_TOKEN is required/);
+    expect(
+      loadConfig({ HOST: "0.0.0.0", ALLOWED_HOSTS: "jobs.example.com", API_TOKEN: "x" })
+        .allowedHosts,
+    ).toEqual(["jobs.example.com"]);
+    expect(loadConfig({}).allowedHosts).toEqual([]);
   });
 
   it("rejects invalid values", () => {

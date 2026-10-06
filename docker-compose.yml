@@ -1,0 +1,55 @@
+# JobTrace in a container: web UI, API, worker and scheduler.
+#
+#   docker compose up -d --build            # then open http://127.0.0.1:4317
+#   docker compose --profile demo up -d     # also start the bundled mock career sites
+#
+# The container has no screen, so recording and logging in happen on your own
+# computer with the jobtrace command line, which sends the result here:
+#
+#   pnpm jobtrace record https://careers.example.com/jobs --server http://127.0.0.1:4317
+# A fixed project name, so the data volume is always called jobtrace_jobtrace-data.
+name: jobtrace
+
+services:
+  jobtrace:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: jobtrace:local
+    init: true
+    # Chromium needs more shared memory than Docker's 64 MB default.
+    shm_size: 1gb
+    ports:
+      # Published on this computer only. The server relies on that: see
+      # ALLOWED_HOSTS in docker/Dockerfile before changing it.
+      - "127.0.0.1:4317:4317"
+      # The mock career sites of the "demo" profile, which share this container's network.
+      - "127.0.0.1:4400:4400"
+    environment:
+      # Times of schedules without a time zone of their own are read in this zone.
+      TZ: ${TZ:-UTC}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - jobtrace-data:/data
+    restart: unless-stopped
+
+  # Mock career sites to try JobTrace on, as used by its own tests. They run in the
+  # server's network namespace, so the example recordings' address
+  # (http://127.0.0.1:4400) works both for the server and in your browser.
+  test-sites:
+    profiles: ["demo"]
+    image: jobtrace:local
+    init: true
+    network_mode: "service:jobtrace"
+    healthcheck:
+      disable: true
+    environment:
+      TEST_SITES_HOST: 0.0.0.0
+    command: ["node", "packages/test-sites/src/main.ts"]
+    depends_on:
+      - jobtrace
+
+volumes:
+  # Database, saved logins and run artifacts. Deliberately a Docker volume rather
+  # than a folder shared with your computer: see "Docker" in the README.
+  jobtrace-data:

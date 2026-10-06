@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { type Config, isLoopbackHost, JobTraceError, newId } from "@jobtrace/core";
+import { type Config, canOpenWindows, JobTraceError, newId } from "@jobtrace/core";
 import type { Database } from "@jobtrace/db";
 import {
   type AuthCapture,
@@ -41,10 +41,12 @@ export function createSessions(
   const entries = new Map<string, Entry>();
 
   function begin(kind: SessionView["kind"], url: string): Entry {
-    if (!isLoopbackHost(config.host)) {
+    if (!canOpenWindows(config)) {
       throw new JobTraceError(
         "INVALID_ARGUMENT",
-        "Recording and login windows open on the server's own screen, so they are only available when the server is bound to localhost.",
+        config.headlessOnly
+          ? "This server runs in a container, which has no screen to show a browser window on. Record on your own computer with the jobtrace command line and send the result here (see --server)."
+          : "Recording and login windows open on the server's own screen, so they are only available when the server is bound to localhost.",
       );
     }
     if ([...entries.values()].some((entry) => entry.view.status === "active")) {

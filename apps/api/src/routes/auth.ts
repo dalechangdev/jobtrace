@@ -1,4 +1,5 @@
-import { rm } from "node:fs/promises";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { JobTraceError } from "@jobtrace/core";
 import { z } from "zod";
 import type { App, RouteContext } from "../deps.ts";
@@ -53,6 +54,48 @@ export function authRoutes(app: App, ctx: RouteContext): void {
         url: request.body.url ?? `https://${profile.domain}/`,
       });
       return reply.code(202).send(session);
+    },
+  );
+
+  app.put(
+    "/api/auth-profiles/:id/session",
+    {
+      // Sessions of sites with much local storage can be large.
+      bodyLimit: 8 * 1024 * 1024,
+      schema: {
+        tags,
+        summary: "Store a login that was captured on another computer",
+        description:
+          "For servers without a screen: `jobtrace auth create --server` logs in on your own computer and sends the session here. Sessions can be sent, never read back.",
+        params: z.object({ id: z.string().regex(/^auth_[A-Za-z0-9]+$/) }),
+        body: z.object({
+          name: z.string().min(1),
+          domain: z.string().min(1),
+          storageState: z.object({ cookies: z.array(z.unknown()), origins: z.array(z.unknown()) }),
+        }),
+        response: { 200: authProfileSchema, 400: errorSchema },
+      },
+    },
+    async (request) => {
+      const { id } = request.params;
+      const { name, domain, storageState } = request.body;
+      const storageStatePath = join(ctx.config.dataDir, "auth", `${id}.json`);
+      await mkdir(dirname(storageStatePath), { recursive: true, mode: 0o700 });
+      await writeFile(storageStatePath, JSON.stringify(storageState), { mode: 0o600 });
+      await chmod(storageStatePath, 0o600);
+      await db.authProfiles.save({ id, name, domain, storageStatePath });
+      const { storageStatePath: _path, ...saved } = (await db.authProfiles.list()).find(
+        (profile) => profile.id === id,
+      ) ?? {
+        id,
+        name,
+        domain,
+        storageStatePath,
+        createdAt: new Date().toISOString(),
+        lastVerifiedAt: null,
+        usedBy: 0,
+      };
+      return saved;
     },
   );
 
