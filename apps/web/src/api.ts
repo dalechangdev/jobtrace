@@ -10,6 +10,7 @@ import type {
   ApiSchedule,
   ApiSession,
   ApiSettings,
+  ApiSuggestion,
   ApiTestStepResult,
   ApiVersion,
   RuntimeSettings,
@@ -128,6 +129,9 @@ export const api = {
     get: (id: string) => get<ApiRunDetail>(`/api/runs/${id}`),
     events: (id: string) => get<ApiEvent[]>(`/api/runs/${id}/events`),
     cancel: (id: string) => request<ApiRun>("POST", `/api/runs/${id}/cancel`),
+    suggestions: (id: string) => get<ApiSuggestion[]>(`/api/runs/${id}/suggestions`),
+    acceptSuggestion: (id: string, index: number) =>
+      request<ApiSuggestion[]>("POST", `/api/runs/${id}/suggestions/${index}/accept`),
     streamUrl: (id: string) =>
       `/api/runs/${id}/events/stream${query({ access_token: token.get() })}`,
     artifactUrl: (runId: string, artifactId: string) =>

@@ -1,7 +1,16 @@
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { JobTraceError, type RunEvent, type RunResult, toJobTraceError } from "@jobtrace/core";
+import {
+  applyLocatorSuggestion,
+  type Healing,
+  JobTraceError,
+  type Recording,
+  type RunEvent,
+  type RunResult,
+  suggestionsFromEvents,
+  toJobTraceError,
+} from "@jobtrace/core";
 import type { Database, RunJobRecord, RunRecord, RunTrigger, StoredArtifact } from "@jobtrace/db";
 import type { Politeness } from "@jobtrace/politeness";
 import { type RunOptions, runRecording } from "@jobtrace/runner";
@@ -25,6 +34,8 @@ export interface ExecuteRunOptions {
    * process. Without it, runs neither check robots.txt nor wait for each other.
    */
   politeness?: Politeness;
+  /** Last-resort healing of broken locators (the optional AI fallback). */
+  healing?: Healing;
   /** Options passed through to the replay engine (browser recordings). */
   run?: Omit<RunOptions, "artifactsDir" | "onEvent" | "robots" | "storageState">;
   /** Options passed through to the feed reader (API sources). */
@@ -77,6 +88,29 @@ export async function savedLogin(
     );
   }
   return profile.storageStatePath;
+}
+
+/**
+ * Writes the locators that healed a run into the recording, ranked first on
+ * their targets. Returns how many were applied.
+ */
+async function applyHealedLocators(
+  db: Database,
+  recording: Recording,
+  events: readonly RunEvent[],
+): Promise<number> {
+  let next = recording;
+  let applied = 0;
+  for (const suggestion of suggestionsFromEvents(events)) {
+    const changed = applyLocatorSuggestion(next, suggestion);
+    if (!changed) continue;
+    next = changed;
+    applied += 1;
+  }
+  if (applied > 0) {
+    await db.recordings.save(next, `Applied ${applied} healed locator(s) automatically`);
+  }
+  return applied;
 }
 
 /** The result of a run that ended before anything was fetched. */
@@ -162,9 +196,11 @@ export async function executeRun(
         });
       } else {
         const storageState = await savedLogin(db, stored.recording.authProfileId);
+        const locatorResolver = launch.locatorResolver ?? options.healing?.createResolver();
         result = await runRecording(stored.recording, {
           ...launch,
           ...robots,
+          ...(locatorResolver ? { locatorResolver } : {}),
           ...(storageState ? { storageState } : {}),
           artifactsDir: artifactsDirFor(options.dataDir, id),
           onEvent: record,
@@ -227,6 +263,26 @@ export async function executeRun(
       message: `${jobs.length} job(s): ${newJobs} new, ${changedJobs} changed, ${closedJobs} closed`,
       data: { jobs: jobs.length, newJobs, changedJobs, closedJobs },
     });
+
+    // Healed locators are only trusted on their own once the whole run worked with them.
+    if (stored.kind === "browser" && options.healing?.autoApply && result.status === "succeeded") {
+      // Re-read: the recording may have been edited while the run was going.
+      const latest = await db.recordings.get(recordingId);
+      const applied =
+        latest?.kind === "browser"
+          ? await applyHealedLocators(db, latest.recording, result.events)
+          : 0;
+      if (applied > 0) {
+        record(
+          note(
+            "info",
+            "locator_suggestions_applied",
+            `Saved ${applied} healed locator(s) into the recording (AI_FALLBACK_AUTO_APPLY)`,
+            { applied },
+          ),
+        );
+      }
+    }
 
     const pruned = await db.artifacts.prune(recordingId, options.artifactRetentionRuns);
     await removeRunArtifacts(options.dataDir, pruned.runIds);

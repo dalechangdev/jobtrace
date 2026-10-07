@@ -1,10 +1,23 @@
 import { createReadStream, existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
-import { JobTraceError, RUN_STATUSES } from "@jobtrace/core";
+import {
+  applyLocatorSuggestion,
+  JobTraceError,
+  RUN_STATUSES,
+  suggestionState,
+  suggestionsFromEvents,
+} from "@jobtrace/core";
 import type { RunRecord } from "@jobtrace/db";
 import { z } from "zod";
 import type { App, RouteContext } from "../deps.ts";
-import { errorSchema, eventSchema, idParams, runDetailSchema, runSchema } from "../schemas.ts";
+import {
+  errorSchema,
+  eventSchema,
+  idParams,
+  runDetailSchema,
+  runSchema,
+  suggestionSchema,
+} from "../schemas.ts";
 import { streamRunEvents } from "../sse.ts";
 
 const tags = ["runs"];
@@ -78,6 +91,72 @@ export function runRoutes(app: App, ctx: RouteContext): void {
       },
     },
     async (request) => db.runs.events((await found(request.params.id)).id),
+  );
+
+  /** The run's healed locators, each with how it stands against the recording as it is now. */
+  async function suggestionsOf(run: RunRecord) {
+    const stored = await db.recordings.get(run.recordingId);
+    if (stored?.kind !== "browser") return { recording: null, suggestions: [] };
+    const suggestions = suggestionsFromEvents(await db.runs.events(run.id)).map(
+      (suggestion, index) => ({
+        index,
+        ...suggestion,
+        state: suggestionState(stored.recording, suggestion),
+      }),
+    );
+    return { recording: stored.recording, suggestions };
+  }
+
+  app.get(
+    "/api/runs/:id/suggestions",
+    {
+      schema: {
+        tags,
+        summary: "Locators that healed broken steps in this run",
+        description:
+          "When every recorded locator of a step failed and the AI fallback found the element again, the locator it used is kept here as a suggestion. Accepting one ranks it first on that step's target.",
+        params: idParams,
+        response: { 200: z.array(suggestionSchema), 404: errorSchema },
+      },
+    },
+    async (request) => (await suggestionsOf(await found(request.params.id))).suggestions,
+  );
+
+  app.post(
+    "/api/runs/:id/suggestions/:index/accept",
+    {
+      schema: {
+        tags,
+        summary: "Save a suggested locator into the recording, ranked first",
+        params: z.object({ id: z.string().min(1), index: z.coerce.number().int().min(0) }),
+        response: { 200: z.array(suggestionSchema), 404: errorSchema, 409: errorSchema },
+      },
+    },
+    async (request, reply) => {
+      const run = await found(request.params.id);
+      const { recording, suggestions } = await suggestionsOf(run);
+      const suggestion = suggestions[request.params.index];
+      if (!recording || !suggestion) {
+        throw new JobTraceError(
+          "NOT_FOUND",
+          `Run ${run.id} has no suggestion ${request.params.index}`,
+        );
+      }
+      if (suggestion.state === "open") {
+        const next = applyLocatorSuggestion(recording, suggestion);
+        if (next)
+          await db.recordings.save(next, `Accepted a healed locator for step ${suggestion.stepId}`);
+      } else if (suggestion.state === "stale") {
+        return reply.code(409).send({
+          error: {
+            code: "INVALID_ARGUMENT",
+            message:
+              "The step was changed or removed since this run, so the suggestion no longer fits. Run the recording again.",
+          },
+        });
+      }
+      return (await suggestionsOf(run)).suggestions;
+    },
   );
 
   app.get(

@@ -1,3 +1,4 @@
+import type { AiHealingOptions } from "@jobtrace/ai-fallback";
 import type { RunningServer, ServerOptions } from "@jobtrace/api";
 import type { Config } from "@jobtrace/core";
 import type { Database } from "@jobtrace/db";
@@ -18,8 +19,10 @@ export interface MainIo {
   onSession?: RecordCommandIo["onSession"];
   /** Tests: a hook to drive a login capture. */
   onAuthCapture?: (capture: AuthCapture) => void;
+  /** Tests: replaces the AI fallback's Claude call. */
+  ai?: AiHealingOptions;
   /** Tests: server overrides, and a hook called once `serve` is listening. */
-  server?: Pick<ServerOptions, "port" | "worker" | "sessionHooks" | "scheduleSyncMs">;
+  server?: Pick<ServerOptions, "port" | "worker" | "sessionHooks" | "scheduleSyncMs" | "ai">;
   onServer?: (server: RunningServer) => void;
 }
 

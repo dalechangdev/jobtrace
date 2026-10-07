@@ -16,6 +16,7 @@ import {
 } from "@jobtrace/test-sites";
 import { type Browser, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { textSimilarity } from "./locators.ts";
 import { runRecording } from "./run.ts";
 import { fastOptions, loadExample } from "./testing.ts";
 
@@ -461,5 +462,137 @@ describe("artifacts and healing", () => {
     );
     expect(result).toMatchObject({ status: "failed", reason: "locator_not_found" });
     expect(result.events.some((event) => event.type === "locator_suggestion_rejected")).toBe(true);
+  });
+
+  it("asks once per broken target, not once per item, and records what failed", async () => {
+    let calls = 0;
+    const result = await run(
+      recording(SITES.staticList, [
+        {
+          id: "each",
+          type: "forEach",
+          items: css("li.job"),
+          body: [
+            {
+              id: "titles",
+              type: "extract",
+              scope: "item",
+              fields: [{ name: "title", target: css(".renamed", "item"), required: true }],
+            },
+          ],
+        },
+      ]),
+      {
+        settings: { stepTimeoutMs: 200 },
+        locatorResolver: {
+          async resolve(_target, context) {
+            calls += 1;
+            expect(context.scope).toBe("item");
+            // Only the item is sent, not the page around it.
+            expect(context.pageSnapshot).toMatch(/^<li/);
+            return { locator: { kind: "css", value: ".title" }, source: "test", reason: "why" };
+          },
+        },
+      },
+    );
+    expect(result.status).toBe("succeeded");
+    expect(result.jobs).toHaveLength(jobsFor("staticList").length);
+    expect(calls).toBe(1);
+    const healed = result.events.filter((event) => event.type === "locator_suggestion");
+    expect(healed).toHaveLength(1);
+    expect(healed[0]?.data).toMatchObject({
+      failed: [{ kind: "css", value: ".renamed" }],
+      locator: { kind: "css", value: ".title" },
+      reason: "why",
+    });
+  });
+
+  it("rejects a suggestion that points at a different kind of element", async () => {
+    const target = (tag: string, text: string) => ({
+      locators: [{ kind: "css" as const, value: "#nope" }],
+      fingerprint: { tag, text },
+    });
+    const attempt = (fingerprint: ReturnType<typeof target>) =>
+      run(recording(SITES.staticList, [{ id: "wait", type: "waitFor", target: fingerprint }]), {
+        settings: { stepTimeoutMs: 200 },
+        locatorResolver: {
+          resolve: async () => ({ locator: { kind: "css", value: "h1" }, source: "test" }),
+        },
+      });
+
+    // Recorded as a button saying something else: the heading is not it.
+    const wrong = await attempt(target("button", "Load more jobs"));
+    expect(wrong).toMatchObject({ status: "failed", reason: "locator_not_found" });
+    expect(
+      wrong.events.find((event) => event.type === "locator_suggestion_rejected"),
+    ).toMatchObject({ data: { tag: "h1", matches: 1 } });
+
+    // The same tag is enough, and so is the same text under a different tag.
+    expect((await attempt(target("h1", "Something else entirely"))).status).toBe("succeeded");
+    expect((await attempt(target("h2", "Open positions"))).status).toBe("succeeded");
+  });
+
+  it("asks about an optional field once per run", async () => {
+    const asked: string[] = [];
+    const result = await run(
+      recording(SITES.staticList, [
+        {
+          id: "each",
+          type: "forEach",
+          items: css("li.job"),
+          body: [
+            {
+              id: "fields",
+              type: "extract",
+              scope: "item",
+              fields: [
+                { name: "title", target: css(".title", "item"), required: true },
+                { name: "salaryText", target: css(".absent", "item") },
+              ],
+            },
+          ],
+        },
+      ]),
+      {
+        tuning: { optionalFieldTimeoutMs: 50 },
+        locatorResolver: {
+          async resolve(target) {
+            asked.push((target.locators[0] as { value: string }).value);
+            return null;
+          },
+        },
+      },
+    );
+    expect(result.status).toBe("succeeded");
+    expect(result.jobs).toHaveLength(jobsFor("staticList").length);
+    expect(asked).toEqual([".absent"]);
+  });
+
+  it("never asks about the logged-in check", async () => {
+    let asked = 0;
+    const result = await run(
+      recording(SITES.staticList, [], { loggedInCheck: css("#account-menu") }),
+      {
+        settings: { stepTimeoutMs: 200 },
+        locatorResolver: {
+          async resolve() {
+            asked += 1;
+            return { locator: { kind: "css", value: "h1" }, source: "test" };
+          },
+        },
+      },
+    );
+    // Without its marker the run reports an expired login rather than guessing one.
+    expect(result).toMatchObject({ status: "failed", reason: "auth_expired" });
+    expect(asked).toBe(0);
+  });
+});
+
+describe("textSimilarity", () => {
+  it("compares texts by the words they share", () => {
+    expect(textSimilarity("Next page", "next   PAGE »")).toBe(1);
+    expect(textSimilarity("Load more jobs", "Show more jobs")).toBeCloseTo(2 / 3);
+    expect(textSimilarity("Apply now", "Senior Engineer")).toBe(0);
+    expect(textSimilarity("", "anything")).toBe(0);
   });
 });

@@ -13,9 +13,8 @@ changed or gone. Open source (MIT), run by you on your own computer.
 - **A polite visitor.** Respects robots.txt, waits between actions, and stops at a
   CAPTCHA instead of trying to get past it.
 
-> **Status: early but usable.** Everything in [PLAN.md](PLAN.md) through milestone M9
-> is built. Not built yet: the optional AI fallback for elements that can no longer be
-> found (the Settings toggle for it does nothing), and notifications.
+> **Status: early but usable.** Every milestone in [PLAN.md](PLAN.md) is built.
+> Notifications about new jobs are not.
 
 ## Contents
 
@@ -25,6 +24,7 @@ changed or gone. Open source (MIT), run by you on your own computer.
 - [Boards on Greenhouse, Lever or Ashby](#boards-on-greenhouse-lever-or-ashby)
 - [Running and tracking jobs](#running-and-tracking-jobs)
 - [The web UI and the HTTP API](#the-web-ui-and-the-http-api)
+- [When a site changes: the AI fallback](#when-a-site-changes-the-ai-fallback)
 - [Docker](#docker)
 - [Command reference](#command-reference) · [Configuration](#configuration)
 - [Responsible use](#responsible-use)
@@ -263,6 +263,53 @@ other websites' pages. To use it from another machine, set `HOST` and an `API_TO
 every request must then send `Authorization: Bearer <token>` (the web UI asks for the
 token once).
 
+## When a site changes: the AI fallback
+
+Optional, and off by default. A recording keeps several locators per element, so most
+redesigns are survived without help. When *every* locator of a step fails, JobTrace can
+ask Claude where the element went instead of failing the run.
+
+To use it, set an Anthropic API key and switch it on:
+
+```sh
+# .env
+ANTHROPIC_API_KEY=sk-ant-...
+AI_FALLBACK_ENABLED=true     # or tick the box on the Settings page
+```
+
+What then happens when a step cannot find its element:
+
+1. JobTrace sends Claude the recorded description of the element (tag, text,
+   attributes), the locators that failed, and a trimmed copy of the part of the page the
+   element is looked up in: the list item for a field of a job card, otherwise the page.
+2. Claude answers with one locator. JobTrace checks it against the live page: it must
+   match exactly one element (or at least one, for a list), and that element must be the
+   same kind of element as the recorded one or say nearly the same thing. A suggestion
+   that fails the check is dropped and the step fails as it would have.
+3. The run goes on with the healed locator. The run's page lists it under **Suggested
+   locators**; **Accept** makes it the step's first locator and keeps the old ones as
+   fallbacks. Until you accept, the recording is unchanged and the next run asks again.
+
+What is sent, and what never is:
+
+- Sent: page markup without scripts, styles and anything typed into forms, capped at
+  60,000 characters, and the page's address without its query string.
+- Never sent: cookies, saved logins, form values, passwords, your job list.
+- Remember that on a board behind a login, the page markup itself may show your name or
+  other account details. Leave the fallback off for recordings where that matters.
+
+Cost is bounded: one question per broken element per run (not per job), and at most
+`AI_FALLBACK_MAX_CALLS` (default 10) per run. An optional field that is simply absent
+costs one question per run, and so does a "next page" control missing on the first page.
+The logged-in check of a recording is never healed, so an expired login is still
+reported as one.
+
+`AI_FALLBACK_AUTO_APPLY=true` saves healed locators into the recording by itself, but
+only after a run that fully succeeded. Leave it off if you would rather review them.
+
+The same variables work for `jobtrace run` on the command line. A server started
+without `ANTHROPIC_API_KEY` ignores the Settings switch.
+
 ## Docker
 
 ```sh
@@ -353,7 +400,11 @@ Environment variables, or a `.env` file in the directory you start `jobtrace` fr
 | `DEFAULT_MIN_DELAY_MS` / `DEFAULT_MAX_DELAY_MS` | `1000` / `3000` | Pause between actions for new recordings. Also on the Settings page. |
 | `LOG_LEVEL` | `info` | `debug` shows every step of a run. |
 | `JOBTRACE_SERVER` / `JOBTRACE_TOKEN` | none | For the command line: the server to send recordings and logins to, and its token. |
-| `AI_FALLBACK_*`, `ANTHROPIC_API_KEY` | off | Reserved for the AI locator fallback, which is not built yet. |
+| `ANTHROPIC_API_KEY` | none | Needed for the [AI fallback](#when-a-site-changes-the-ai-fallback). Read from the environment only; never stored or shown. |
+| `AI_FALLBACK_ENABLED` | `false` | Ask Claude when every locator of a step fails. Also on the Settings page. |
+| `AI_FALLBACK_MODEL` | `claude-opus-5-5` | The Claude model to ask. |
+| `AI_FALLBACK_MAX_CALLS` | `10` | Most questions per run. |
+| `AI_FALLBACK_AUTO_APPLY` | `false` | Save healed locators into the recording after a successful run, without asking. |
 
 Values saved on the Settings page are stored in the database and take precedence over
 the environment.
@@ -387,7 +438,12 @@ Respect each site's terms of use and keep request volumes low. See
   no longer has what the recording looks for. The error lists each locator and how many
   elements it matched, and the screenshot shows the page. Open the recording, use
   **Test step** to find the step that breaks, then reorder or remove locators, or
-  record that board again.
+  record that board again. The [AI fallback](#when-a-site-changes-the-ai-fallback) can
+  repair such steps by itself.
+- **`locator_resolver_error` or "Suggested locator … rejected" in a run's log.** The AI
+  fallback was asked and could not help: the message says why (key rejected, rate
+  limit, call limit used up, or a suggestion that did not fit the page). The run
+  continues as if the fallback were off.
 - **Locator warnings (`locator_drift`).** The preferred locator stopped working and a
   fallback was used. The run still succeeds; re-record before the fallbacks break too.
 - **`robots_disallowed`.** The site's robots.txt does not allow automated visits to that

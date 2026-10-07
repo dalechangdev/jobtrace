@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { type AiHealingOptions, aiHealing } from "@jobtrace/ai-fallback";
 import { type Config, isLoopbackHost } from "@jobtrace/core";
 import { type Database, openDatabase } from "@jobtrace/db";
 import { createPoliteness } from "@jobtrace/politeness";
@@ -28,7 +29,9 @@ export interface ServerOptions {
    * rules still follow `config.host`, without really exposing the port.
    */
   listenHost?: string;
-  worker?: Pick<WorkerOptions, "pollIntervalMs" | "run" | "source">;
+  worker?: Pick<WorkerOptions, "pollIntervalMs" | "run" | "source" | "healing">;
+  /** Tests: replaces the AI fallback's Claude call. */
+  ai?: Pick<AiHealingOptions, "suggest">;
   sessionHooks?: AppDeps["sessionHooks"];
   webRoot?: AppDeps["webRoot"];
   /** How often schedules are re-read from the database; see SchedulerOptions.syncIntervalMs. */
@@ -56,6 +59,11 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
   const politeness = createPoliteness({ cacheDir: join(config.dataDir, "cache", "robots") });
   const hub = createRunHub();
   const runtime = await loadRuntime(db, config);
+  // The Settings switch is read before every run; the API key stays in the environment.
+  const healing = aiHealing(config, {
+    ...options.ai,
+    enabled: () => runtime.current.aiFallbackEnabled,
+  });
   let worker: Worker | undefined;
   const queue = createDbQueue(db, { onEnqueue: () => worker?.wake() });
   worker = createWorker({
@@ -66,6 +74,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     dataDir: config.dataDir,
     artifactRetentionRuns: () => runtime.current.artifactRetentionRuns,
     maxConcurrentRuns: () => runtime.current.maxConcurrentRuns,
+    ...(healing ? { healing } : {}),
     ...options.worker,
     onError: (error, run) => app.log.error({ err: error, runId: run.id }, "run crashed"),
   });

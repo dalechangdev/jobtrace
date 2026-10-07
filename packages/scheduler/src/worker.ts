@@ -18,6 +18,7 @@ export interface WorkerOptions {
   /** Extra replay options for every run (tests pass a shared browser and timings). */
   run?: ExecuteRunOptions["run"];
   source?: ExecuteRunOptions["source"];
+  healing?: ExecuteRunOptions["healing"];
   onError?: (error: unknown, run: RunRecord) => void;
 }
 
@@ -63,6 +64,7 @@ export function createWorker(options: WorkerOptions): Worker {
       ...(run.scheduleId ? { scheduleId: run.scheduleId } : {}),
       run: { ...options.run, signal: controller.signal },
       ...(options.source ? { source: options.source } : {}),
+      ...(options.healing ? { healing: options.healing } : {}),
       onEvent: (event) => hub.publish(run.id, event),
     })
       .then(

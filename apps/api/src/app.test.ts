@@ -14,7 +14,7 @@ import {
 } from "@jobtrace/test-sites";
 import { type Browser, chromium } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { type RunningServer, startServer } from "./server.ts";
+import { type RunningServer, type ServerOptions, startServer } from "./server.ts";
 import type { SessionHooks } from "./sessions.ts";
 
 let sites: RunningTestSites;
@@ -33,7 +33,10 @@ afterAll(async () => {
   await sites?.close();
 });
 
-async function start(env: Record<string, string> = {}): Promise<Config> {
+async function start(
+  env: Record<string, string> = {},
+  extra: Pick<ServerOptions, "ai"> = {},
+): Promise<Config> {
   const config = loadConfig({ DATA_DIR: dataDir, ...env });
   hooks = { recorder: { browser, headless: true, openShadow: true } };
   server = await startServer({
@@ -42,6 +45,7 @@ async function start(env: Record<string, string> = {}): Promise<Config> {
     port: 0,
     listenHost: "127.0.0.1",
     sessionHooks: hooks,
+    ...extra,
     worker: {
       pollIntervalMs: 50,
       run: {
@@ -673,6 +677,9 @@ describe("support for the web UI", () => {
       defaultMaxDelayMs: 3000,
       aiFallbackEnabled: false,
       aiFallbackKeyConfigured: false,
+      aiFallbackModel: "claude-opus-5-5",
+      aiFallbackMaxCalls: 10,
+      aiFallbackAutoApply: false,
       dataDir,
       local: true,
     });
@@ -711,6 +718,92 @@ describe("support for the web UI", () => {
       maxConcurrentRuns: 1,
       defaultMaxDelayMs: 0,
     });
+  });
+
+  it("heals a broken step with the AI fallback once it is switched on, and takes over an accepted suggestion", async () => {
+    await server.close();
+    let calls = 0;
+    await start(
+      {},
+      {
+        ai: {
+          suggest: async () => {
+            calls += 1;
+            return {
+              stop_reason: "end_turn",
+              parsed_output: {
+                found: true,
+                kind: "css",
+                value: ".title",
+                name: null,
+                reason: "The item's only link.",
+              },
+            };
+          },
+        },
+      },
+    );
+    const id = await createBoard();
+    const definition = (await api("GET", `/api/recordings/${id}`)).body.definition;
+    const titleOf = (target: typeof definition) => target.steps[1].body[0].fields[0].target;
+    titleOf(definition).locators = [{ kind: "css", value: ".renamed" }];
+    expect((await api("PUT", `/api/recordings/${id}`, definition)).status).toBe(200);
+
+    // Switched off (the default), nothing is sent anywhere and the run fails as it would have.
+    const failed = await runToEnd(id);
+    expect(failed.run.status).toBe("failed");
+    expect(calls).toBe(0);
+    expect((await api("GET", `/api/runs/${failed.run.id}/suggestions`)).body).toEqual([]);
+
+    expect(
+      (await api("PUT", "/api/settings", { aiFallbackEnabled: true })).body.aiFallbackEnabled,
+    ).toBe(true);
+    const healed = await runToEnd(id);
+    expect(healed.run.status).toBe("succeeded");
+    expect(healed.jobs).toHaveLength(changingJobs(1).length);
+    expect(calls).toBe(1);
+
+    const url = `/api/runs/${healed.run.id}/suggestions`;
+    const open = {
+      index: 0,
+      stepId: "s3",
+      failed: [{ kind: "css", value: ".renamed" }],
+      locator: { kind: "css", value: ".title" },
+      source: "ai",
+      reason: "The item's only link.",
+      state: "open",
+    };
+    expect((await api("GET", url)).body).toEqual([open]);
+    // Suggested only: the recording is untouched until someone accepts.
+    expect(titleOf((await api("GET", `/api/recordings/${id}`)).body.definition).locators).toEqual(
+      open.failed,
+    );
+
+    const accepted = await api("POST", `${url}/0/accept`);
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toEqual([{ ...open, state: "applied" }]);
+    const saved = (await api("GET", `/api/recordings/${id}`)).body.definition;
+    expect(titleOf(saved).locators).toEqual([open.locator, ...open.failed]);
+    // Accepting twice changes nothing more.
+    expect((await api("POST", `${url}/0/accept`)).body[0].state).toBe("applied");
+    expect(titleOf((await api("GET", `/api/recordings/${id}`)).body.definition).locators).toEqual([
+      open.locator,
+      ...open.failed,
+    ]);
+    expect((await api("POST", `${url}/3/accept`)).status).toBe(404);
+    expect((await api("GET", "/api/runs/run_nope/suggestions")).status).toBe(404);
+
+    // With the accepted locator the next run needs no help.
+    expect((await runToEnd(id)).run.status).toBe("succeeded");
+    expect(calls).toBe(1);
+
+    // A suggestion for a target that was edited since no longer fits.
+    titleOf(saved).locators = [{ kind: "css", value: "a.title" }];
+    await api("PUT", `/api/recordings/${id}`, saved);
+    expect((await api("GET", url)).body[0].state).toBe("stale");
+    const stale = await api("POST", `${url}/0/accept`);
+    expect(stale.status).toBe(409);
+    expect(stale.body.error.message).toMatch(/changed or removed/);
   });
 
   it("serves the UI's page for browser paths, and JSON errors for API paths", async () => {

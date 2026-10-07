@@ -1,3 +1,4 @@
+import { DEFAULT_AI_MODEL } from "@jobtrace/ai-fallback";
 import { canOpenWindows } from "@jobtrace/core";
 import type { App, RouteContext } from "../deps.ts";
 import { runtimeSettingsSchema } from "../runtime.ts";
@@ -8,6 +9,9 @@ export function settingsRoutes(app: App, ctx: RouteContext): void {
   const view = () => ({
     ...ctx.runtime.current,
     aiFallbackKeyConfigured: Boolean(ctx.config.aiFallback.apiKey),
+    aiFallbackModel: ctx.config.aiFallback.model ?? DEFAULT_AI_MODEL,
+    aiFallbackMaxCalls: ctx.config.aiFallback.maxCalls,
+    aiFallbackAutoApply: ctx.config.aiFallback.autoApply,
     dataDir: ctx.config.dataDir,
     local: canOpenWindows(ctx.config),
   });

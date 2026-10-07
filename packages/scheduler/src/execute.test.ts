@@ -425,6 +425,102 @@ describe("executeRun", () => {
     expect(await db.runs.list()).toHaveLength(1);
   });
 
+  describe("healing", () => {
+    const broken = () => {
+      const recording = boardRecording();
+      const extract = (recording.steps[1] as { body: Recording["steps"] }).body[0];
+      if (extract?.type === "extract" && extract.fields[0]) {
+        extract.fields[0].target.locators = [{ kind: "css", value: ".renamed" }];
+      }
+      return recording;
+    };
+    const titleLocators = async () => {
+      const stored = await db.recordings.get("rec_board");
+      const loop = stored?.kind === "browser" ? stored.recording.steps[1] : undefined;
+      const extract = loop && "body" in loop ? loop.body[0] : undefined;
+      return extract?.type === "extract" ? extract.fields[0]?.target.locators : undefined;
+    };
+    const healing = (autoApply: boolean, value = ".title") => {
+      const state = { resolvers: 0, calls: 0 };
+      return {
+        state,
+        healing: {
+          autoApply,
+          createResolver: () => {
+            state.resolvers += 1;
+            return {
+              resolve: async () => {
+                state.calls += 1;
+                return { locator: { kind: "css" as const, value }, source: "ai" };
+              },
+            };
+          },
+        },
+      };
+    };
+
+    it("heals a run with a fresh resolver and leaves the recording alone by default", async () => {
+      await db.recordings.save(broken());
+      expect((await execute()).run.status).toBe("failed");
+
+      const { healing: plugin, state } = healing(false);
+      const first = await execute("rec_board", { healing: plugin });
+      expect(first.run.status).toBe("succeeded");
+      expect(first.jobs).toHaveLength(changingJobs(1).length);
+      await execute("rec_board", { healing: plugin });
+      expect(state).toEqual({ resolvers: 2, calls: 2 });
+      expect(await titleLocators()).toEqual([{ kind: "css", value: ".renamed" }]);
+      expect(
+        (await db.runs.events(first.run.id)).filter((event) => event.type === "locator_suggestion"),
+      ).toHaveLength(1);
+    });
+
+    it("saves healed locators into the recording when auto-apply is on", async () => {
+      await db.recordings.save(broken());
+      const { healing: plugin, state } = healing(true);
+      const first = await execute("rec_board", { healing: plugin });
+      expect(first.run.status).toBe("succeeded");
+      expect(await titleLocators()).toEqual([
+        { kind: "css", value: ".title" },
+        { kind: "css", value: ".renamed" },
+      ]);
+      expect(
+        (await db.runs.events(first.run.id)).find(
+          (event) => event.type === "locator_suggestions_applied",
+        ),
+      ).toMatchObject({ data: { applied: 1 } });
+      const versions = await db.recordings.versions("rec_board");
+      expect(versions.some((version) => /healed locator/.test(version.note ?? ""))).toBe(true);
+
+      // The next run finds the element by itself.
+      expect((await execute("rec_board", { healing: plugin })).run.status).toBe("succeeded");
+      expect(state.calls).toBe(1);
+    });
+
+    it("does not auto-apply after a run that did not fully succeed", async () => {
+      // The healed title works, but a later required step still fails.
+      const recording = broken();
+      recording.steps.push({
+        id: "s9",
+        type: "click",
+        target: { locators: [{ kind: "css", value: "#nope" }], frame: [], relativeTo: null },
+      });
+      await db.recordings.save(recording);
+      const plugin = {
+        autoApply: true,
+        createResolver: () => ({
+          resolve: async (target: { locators: Array<{ kind: string; value?: string }> }) =>
+            target.locators[0]?.value === ".renamed"
+              ? { locator: { kind: "css" as const, value: ".title" }, source: "ai" }
+              : null,
+        }),
+      };
+      const result = await execute("rec_board", { healing: plugin });
+      expect(result.run.status).not.toBe("succeeded");
+      expect(await titleLocators()).toEqual([{ kind: "css", value: ".renamed" }]);
+    });
+  });
+
   it("rejects unknown recordings, and never leaves a run stuck in running", async () => {
     await expect(execute("rec_nope")).rejects.toMatchObject({ code: "NOT_FOUND" });
 

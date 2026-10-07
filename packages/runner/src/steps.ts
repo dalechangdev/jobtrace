@@ -228,6 +228,8 @@ async function checkLoggedIn(state: RunState, page: Page, stepId: string): Promi
     stepId,
     list: true,
     optional: true,
+    // A guessed marker could hide an expired login.
+    noHeal: true,
   });
   if (!found) {
     throw new JobTraceError(
@@ -466,6 +468,8 @@ async function paginate(state: RunState, scope: Scope, step: StepOf<"paginate">)
           stepId: step.id,
           list: true,
           optional: true,
+          // Only a probe; the forEach step itself asks for help when the list is gone.
+          noHeal: true,
           timeoutMs,
         })
       : Promise.resolve(null);
@@ -560,6 +564,9 @@ async function paginate(state: RunState, scope: Scope, step: StepOf<"paginate">)
       ? await resolveTarget(state, scope, step.next, {
           stepId: step.id,
           optional: true,
+          // No next control on a later page is how pagination normally ends. On
+          // the first page it may also mean the control was renamed.
+          noHeal: number > 1,
           timeoutMs: state.tuning.nextTimeoutMs,
         })
       : null;

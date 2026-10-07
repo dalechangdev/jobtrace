@@ -18,7 +18,9 @@ silently diverging. Record agreed changes in `PLAN.md` itself.
 - [x] M7 — Web UI
 - [x] M8 — Scheduler
 - [x] M9 — Packaging and docs
-- [ ] M10 — AI fallback plugin  ← next
+- [x] M10 — AI fallback plugin
+
+All planned milestones are built. What is left is under "Later" in `PLAN.md`.
 
 A milestone is done when its acceptance criteria in `PLAN.md` pass, along with
 `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `README.md` covers anything user-facing.
@@ -61,6 +63,10 @@ A milestone is done when its acceptance criteria in `PLAN.md` pass, along with
   the `JobQueue` over the `runs` table, the `Worker` that executes queued runs, and the
   `RunHub` that carries live events to watchers, and the `Scheduler` that turns stored
   schedules into queued runs (`cron.ts` validates and describes cron expressions).
+- `packages/ai-fallback` — the optional `LocatorResolver` that asks Claude (official
+  `@anthropic-ai/sdk`, structured output). `aiHealing(config)` is what apps wire in; the
+  runner validates every suggestion (`heal` in `packages/runner/src/locators.ts`). Tests
+  replace the one `Suggest` function; nothing in the default test run calls the API.
 - `packages/test-sites` — mock career sites; `src/data.ts` is the ground truth tests compare against
 - `apps/api` — the HTTP API (Fastify with Zod schemas and OpenAPI). `buildApp(deps)`
   assembles routes; `startServer(options)` adds the worker and listens, and is what

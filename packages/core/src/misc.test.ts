@@ -78,7 +78,7 @@ describe("config", () => {
       defaultMinDelayMs: 1000,
       defaultMaxDelayMs: 3000,
       artifactRetentionRuns: 20,
-      aiFallback: { enabled: false, maxCalls: 10 },
+      aiFallback: { enabled: false, maxCalls: 10, autoApply: false },
       logLevel: "info",
     });
   });
@@ -91,6 +91,7 @@ describe("config", () => {
     expect(config.dataDir).toBe("/srv/app/data");
     expect(config.port).toBe(8080);
     expect(config.aiFallback.enabled).toBe(true);
+    expect(loadConfig({ AI_FALLBACK_AUTO_APPLY: "1" }).aiFallback.autoApply).toBe(true);
     expect(config.logLevel).toBe("info");
   });
 

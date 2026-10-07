@@ -65,20 +65,37 @@ export interface ResolvedLocator {
   locator: Locator;
   /** Where the suggestion came from, e.g. "ai". */
   source: string;
+  /** Why the resolver picked it, in a sentence. Shown next to the suggestion. */
+  reason?: string;
 }
 
 export interface LocatorResolverContext {
-  /** Trimmed page snapshot. Never contains input values or cookies. */
+  /**
+   * Trimmed HTML of the area the target lives in: the page, the innermost
+   * frame, or the current list item. Never contains input values or cookies.
+   */
   pageSnapshot: string;
+  /** What `pageSnapshot` covers. A suggested locator is resolved inside it. */
+  scope: "page" | "frame" | "item";
   url: string;
   stepId: string;
   /** True when the target must match a list of elements rather than exactly one. */
   list: boolean;
+  /** Fires when the run is cancelled. */
+  signal?: AbortSignal;
 }
 
 /** Last-resort locator healing, implemented by the optional ai-fallback plugin. */
 export interface LocatorResolver {
   resolve(target: Target, context: LocatorResolverContext): Promise<ResolvedLocator | null>;
+}
+
+/** How runs heal broken locators: a fresh resolver per run, and what to do with what it finds. */
+export interface Healing {
+  /** A resolver for one run, or undefined while healing is switched off. */
+  createResolver(): LocatorResolver | undefined;
+  /** Whether healed locators are written into the recording without asking. */
+  autoApply: boolean;
 }
 
 export interface RobotsVerdict {

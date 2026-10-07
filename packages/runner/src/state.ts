@@ -2,6 +2,7 @@ import { setTimeout as sleepFor } from "node:timers/promises";
 import {
   type ErrorCode,
   JobTraceError,
+  type Locator as LocatorSpec,
   type RawRecord,
   type Recording,
   type RecordingSettings,
@@ -73,6 +74,10 @@ export interface RunState {
   stats: { pages: number; itemsSeen: number; itemErrors: number };
   /** Index of the locator that last worked for a target. */
   locatorMemo: WeakMap<Target, number>;
+  /** Locators a LocatorResolver suggested for a target and that held up. */
+  healed: WeakMap<Target, LocatorSpec>;
+  /** Targets the LocatorResolver was already asked about. */
+  healTried: WeakSet<Target>;
   /** Errors whose failure artifacts were already captured. */
   captured: WeakSet<object>;
   /** Pages currently inside a navigation the runner itself started. */

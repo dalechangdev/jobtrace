@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type RunningServer, startServer } from "@jobtrace/api";
-import { loadConfig } from "@jobtrace/core";
+import { loadConfig, walkSteps } from "@jobtrace/core";
 import { type Database, openDatabase } from "@jobtrace/db";
 import {
   changingJobs,
@@ -41,6 +41,19 @@ beforeAll(async () => {
     db,
     port: 0,
     webRoot,
+    // Stands in for Claude: the renamed title is the item's link.
+    ai: {
+      suggest: async () => ({
+        stop_reason: "end_turn",
+        parsed_output: {
+          found: true,
+          kind: "css",
+          value: "a.title",
+          name: null,
+          reason: "The link that carries the job title.",
+        },
+      }),
+    },
     worker: {
       pollIntervalMs: 50,
       run: {
@@ -354,6 +367,57 @@ describe("the web UI, end to end", () => {
     await row.getByText("0 recordings").waitFor();
     await row.getByRole("button", { name: "Delete" }).click();
     await page.getByText("No saved logins.").waitFor();
+  });
+
+  it("heals a broken step with the AI fallback and accepts its suggestion", async () => {
+    // The site "renamed" the title: every locator the recording has for it is now wrong.
+    const id = recordingUrl.split("/").pop() ?? "";
+    const stored = await db.recordings.get(id);
+    if (stored?.kind !== "browser") throw new Error("expected the recording made earlier");
+    const broken = structuredClone(stored.recording);
+    broken.settings.stepTimeoutMs = 1000;
+    const brokenLocators = [{ kind: "css" as const, value: ".headline-gone" }];
+    const titleTargets = () => {
+      const fields = [...walkSteps(broken.steps)].flatMap((step) =>
+        step.type === "extract" ? step.fields : [],
+      );
+      return fields.filter((field) => field.name === "title").map((field) => field.target);
+    };
+    for (const target of titleTargets()) target.locators = brokenLocators;
+    expect(titleTargets()).toHaveLength(1);
+    await db.recordings.save(broken, "broken for the test");
+
+    await page.getByRole("navigation").getByRole("link", { name: "Settings" }).click();
+    await heading("Settings").waitFor();
+    await page.getByText(/No API key is configured/).waitFor();
+    await page.getByLabel(/Ask Claude to find an element/).check();
+    await page.getByRole("button", { name: "Save settings" }).click();
+    await page.getByText("Saved.").waitFor();
+
+    await page.goto(recordingUrl);
+    await page.getByRole("button", { name: "Run now" }).click();
+    expect(await runFinished()).toBe("succeeded");
+    await page
+      .getByRole("list", { name: "Run log" })
+      .getByText(/Healed with a ai locator suggestion/)
+      .waitFor();
+
+    const suggestions = page.getByTestId("suggestions");
+    const row = suggestions.locator("li");
+    await row.getByText("The link that carries the job title.").waitFor();
+    expect(await row.count()).toBe(1);
+    await row.getByText(/headline-gone/).waitFor();
+    await row.getByRole("button", { name: "Accept" }).click();
+    await row.getByText("In the recording").waitFor();
+
+    const healed = await db.recordings.get(id);
+    const saved =
+      healed?.kind === "browser"
+        ? [...walkSteps(healed.recording.steps)]
+            .flatMap((step) => (step.type === "extract" ? step.fields : []))
+            .find((field) => field.name === "title")?.target.locators
+        : undefined;
+    expect(saved).toEqual([{ kind: "css", value: "a.title" }, ...brokenLocators]);
   });
 
   it("deletes the recording, serves deep links, and logged no browser errors", async () => {

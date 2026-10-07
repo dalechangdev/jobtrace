@@ -8,6 +8,7 @@
     "jobtrace": "./bin/jobtrace.js"
   },
   "dependencies": {
+    "@jobtrace/ai-fallback": "workspace:*",
     "@jobtrace/api": "workspace:*",
     "@jobtrace/core": "workspace:*",
     "@jobtrace/db": "workspace:*",

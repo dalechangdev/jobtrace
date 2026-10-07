@@ -6,4 +6,5 @@ export * from "./migrations/index.ts";
 export * from "./recording.ts";
 export * from "./run.ts";
 export * from "./source.ts";
+export * from "./suggestions.ts";
 export * from "./templating.ts";

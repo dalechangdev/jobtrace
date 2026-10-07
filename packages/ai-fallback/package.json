@@ -1,0 +1,20 @@
+{
+  "name": "@jobtrace/ai-fallback",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@jobtrace/core": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@jobtrace/runner": "workspace:*",
+    "@jobtrace/test-sites": "workspace:*",
+    "playwright": "^1.63.0"
+  }
+}

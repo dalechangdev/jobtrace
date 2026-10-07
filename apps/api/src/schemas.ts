@@ -1,4 +1,4 @@
-import { jobSchema, REMOTE_VALUES, RUN_STATUSES } from "@jobtrace/core";
+import { jobSchema, locatorSchema, REMOTE_VALUES, RUN_STATUSES } from "@jobtrace/core";
 import { z } from "zod";
 import { runtimeSettingsSchema } from "./runtime.ts";
 
@@ -124,6 +124,19 @@ export const eventSchema = z.object({
   data: z.record(z.string(), z.unknown()).optional(),
 });
 
+/** A locator that healed a run, and whether the recording has taken it over yet. */
+export const suggestionSchema = z.object({
+  /** Position in the run's list of suggestions; what "accept" refers to. */
+  index: z.number().int(),
+  stepId: z.string(),
+  failed: z.array(locatorSchema),
+  locator: locatorSchema,
+  source: z.string(),
+  reason: z.string().optional(),
+  /** open: can be accepted. applied: already in the recording. stale: the step changed since. */
+  state: z.enum(["open", "applied", "stale"]),
+});
+
 export const authProfileSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -187,6 +200,11 @@ export const testStepResultSchema = z.object({
 export const settingsViewSchema = runtimeSettingsSchema.extend({
   /** Whether ANTHROPIC_API_KEY is set in the server's environment. Never the key itself. */
   aiFallbackKeyConfigured: z.boolean(),
+  /** The Claude model the fallback asks. */
+  aiFallbackModel: z.string(),
+  aiFallbackMaxCalls: z.number().int(),
+  /** Whether healed locators are saved into the recording without asking (AI_FALLBACK_AUTO_APPLY). */
+  aiFallbackAutoApply: z.boolean(),
   dataDir: z.string(),
   /** Whether the server can open browser windows on the user's screen (false in a container or on another machine). */
   local: z.boolean(),

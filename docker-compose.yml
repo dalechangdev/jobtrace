@@ -29,6 +29,12 @@ services:
       # Times of schedules without a time zone of their own are read in this zone.
       TZ: ${TZ:-UTC}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # The optional AI locator fallback; off unless a key is given. See the README.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_FALLBACK_ENABLED: ${AI_FALLBACK_ENABLED:-false}
+      AI_FALLBACK_MODEL: ${AI_FALLBACK_MODEL:-}
+      AI_FALLBACK_MAX_CALLS: ${AI_FALLBACK_MAX_CALLS:-10}
+      AI_FALLBACK_AUTO_APPLY: ${AI_FALLBACK_AUTO_APPLY:-false}
     volumes:
       - jobtrace-data:/data
     restart: unless-stopped

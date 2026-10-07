@@ -634,6 +634,19 @@ Order rationale: the recording format and a replay engine come first, so the rec
 - Tests use a mocked Claude client; one optional live test gated behind an env var.
 - **Accept**: on site 9 with all deterministic locators deliberately broken, the plugin (mocked) heals the step; suggestions appear in the UI and can be accepted.
 
+**Decisions made while building M10**
+- **Claude is called through the official `@anthropic-ai/sdk`**, with structured output (a flat JSON schema: `found`, `kind`, `value`, `name`, `reason`) rather than free text. `AI_FALLBACK_MODEL` defaults to `claude-opus-5-5`; the request opts into the API's server-side model fallbacks, so an unavailable model does not fail the heal.
+- **The snapshot covers only where the element is looked up**: the current list item for an item-relative target, the innermost frame's document for a framed one, else the page. Smaller prompts, and a suggested locator is relative to exactly what the model saw. The page address is sent without query string or fragment.
+- **One question per broken target per run, not per item.** A healed locator is remembered for the rest of the run. The per-run cap (`AI_FALLBACK_MAX_CALLS`) counts calls; reaching it is logged once.
+- **Optional targets are healed too, once per run each**, since a renamed optional field would otherwise silently come back empty. The cost is one call per run for a field that is legitimately absent. A missing "next page" control is asked about only on the first page (later, it is how pagination ends). Pagination's internal list probes never ask.
+- **The logged-in check is never healed.** A guessed marker could report "logged in" on a login page.
+- **Fingerprint check**: a suggestion is accepted when the element's tag equals the recorded tag, or its text shares at least 60 % of its words with the recorded text. Text cannot be required, because an extracted field reads differently on every job. A target without a fingerprint (hand-written recordings) is checked by match count only.
+- **A suggestion identifies its target by step id plus the locators that failed**, carried in the `locator_suggestion` event. Accepting ranks the new locator first on every target of that step with exactly those locators (title and URL often share one element) and keeps the old ones as fallbacks. If the step was edited since, the suggestion is shown as stale and cannot be accepted. New routes: `GET /api/runs/:id/suggestions`, `POST /api/runs/:id/suggestions/:index/accept`.
+- **`AI_FALLBACK_AUTO_APPLY` applies only after a run that fully succeeded**, as a new recording version with a note.
+- **The Settings switch needs the key in the environment.** The key is never stored in the database or returned by the API; without it the switch is shown with a note that it has no effect. `jobtrace run` on the command line follows `AI_FALLBACK_ENABLED` from the environment, not the Settings page.
+- **"Test step" does not use the fallback**, so trying out steps never costs API calls.
+- The live test runs with `AI_FALLBACK_LIVE_TEST=1` and `ANTHROPIC_API_KEY` set.
+
 ### Later (not scheduled)
 - Postgres repositories and pg-boss `JobQueue`.
 - Notifications on new jobs: desktop notification first (the author's preferred channel), then webhook, then email/Slack.
@@ -657,8 +670,9 @@ Loaded once in `core/config.ts`, validated with Zod, from env (with `.env` suppo
 | `ARTIFACT_RETENTION_RUNS` | `20` | Per recording |
 | `AI_FALLBACK_ENABLED` | `false` | Plugin toggle |
 | `ANTHROPIC_API_KEY` | — | Plugin |
-| `AI_FALLBACK_MODEL` | — | Plugin model id |
+| `AI_FALLBACK_MODEL` | `claude-opus-5-5` | Plugin model id |
 | `AI_FALLBACK_MAX_CALLS` | `10` | Per run |
+| `AI_FALLBACK_AUTO_APPLY` | `false` | Save healed locators after a successful run |
 | `LOG_LEVEL` | `info` | pino |
 
 ---

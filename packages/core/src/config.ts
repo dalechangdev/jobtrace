@@ -34,6 +34,7 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: optionalString,
   AI_FALLBACK_MODEL: optionalString,
   AI_FALLBACK_MAX_CALLS: intWithDefault(10),
+  AI_FALLBACK_AUTO_APPLY: boolWithDefault(false),
   LOG_LEVEL: z.preprocess(
     blankToUndefined,
     z.enum(["trace", "debug", "info", "warn", "error", "fatal", "silent"]).default("info"),
@@ -61,7 +62,10 @@ export interface Config {
     enabled: boolean;
     apiKey: string | undefined;
     model: string | undefined;
+    /** Most Claude calls one run may make. */
     maxCalls: number;
+    /** Save a healed locator into the recording once the run succeeded, without asking. */
+    autoApply: boolean;
   };
   logLevel: z.infer<typeof envSchema>["LOG_LEVEL"];
 }
@@ -137,6 +141,7 @@ export function loadConfig(
       apiKey: values.ANTHROPIC_API_KEY,
       model: values.AI_FALLBACK_MODEL,
       maxCalls: values.AI_FALLBACK_MAX_CALLS,
+      autoApply: values.AI_FALLBACK_AUTO_APPLY,
     },
     logLevel: values.LOG_LEVEL,
   };

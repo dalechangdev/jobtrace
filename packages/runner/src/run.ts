@@ -98,6 +98,8 @@ export async function runRecording(
       artifacts: [],
       stats,
       locatorMemo: new WeakMap(),
+      healed: new WeakMap(),
+      healTried: new WeakSet(),
       captured: new WeakSet(),
       navigating: new WeakSet(),
       activePage: page,

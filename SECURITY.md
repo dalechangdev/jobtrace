@@ -26,8 +26,17 @@ feature on this repository rather than opening a public issue.
   other people's HTML; the server never renders them as a page.
 - **Exports are spreadsheet-safe.** CSV cells that a spreadsheet would run as a
   formula are neutralized.
-- **The AI fallback plugin is off by default.** When enabled it sends a trimmed,
-  sanitized page snapshot (no input values, no cookies) to the Claude API.
+- **The AI fallback plugin is off by default.** When enabled (it needs
+  `ANTHROPIC_API_KEY` and the switch), a step whose every locator failed sends the
+  Claude API a trimmed copy of the part of the page it searches: markup without
+  scripts, styles or anything typed into forms, plus the page address without its query
+  string. Cookies, saved logins and form values are never sent. Page markup of a board
+  behind a login can itself contain account details; leave the plugin off where that
+  matters. The API key is read from the environment only: it is not stored in the
+  database, not logged, and not returned by the API.
+- **Page content is treated as untrusted by the plugin.** The model can only answer
+  with a locator, which is checked against the live page before use; text on a page
+  cannot make JobTrace do anything else.
 
 ## What JobTrace will not do
 

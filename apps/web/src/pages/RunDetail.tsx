@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { api } from "../api.ts";
 import { JobsTable } from "../components/JobsTable.tsx";
-import { timeline } from "../lib/definition.ts";
+import { describeLocator, timeline } from "../lib/definition.ts";
 import { duration, plural, reasonText, when } from "../lib/format.ts";
 import {
   Badge,
@@ -85,6 +85,19 @@ export function RunDetail() {
   const cancel = useMutation({
     mutationFn: () => api.runs.cancel(id),
     onSuccess: () => client.invalidateQueries({ queryKey: ["run", id] }),
+  });
+  const finished = Boolean(detail.data && !ACTIVE.has(detail.data.run.status));
+  const suggestions = useQuery({
+    queryKey: ["run", id, "suggestions"],
+    queryFn: () => api.runs.suggestions(id),
+    enabled: finished,
+  });
+  const accept = useMutation({
+    mutationFn: (index: number) => api.runs.acceptSuggestion(id, index),
+    onSuccess: (next) => {
+      client.setQueryData(["run", id, "suggestions"], next);
+      void client.invalidateQueries({ queryKey: ["recording"] });
+    },
   });
   const [verbose, setVerbose] = useState(false);
   const steps = useMemo(() => timeline(events), [events]);
@@ -225,6 +238,54 @@ export function RunDetail() {
                 </li>
               ))}
             </ol>
+          </Card>
+        )}
+
+        {suggestions.data && suggestions.data.length > 0 && (
+          <Card title="Suggested locators">
+            <p className="px-4 pt-3 text-xs text-zinc-500">
+              These steps could not find their element with any recorded locator. The AI fallback
+              found it another way, and the run went on with that. Accept a suggestion to make it
+              the step's first locator; the old ones stay as fallbacks.
+            </p>
+            <ErrorNote error={accept.error} />
+            <ul
+              className="divide-y divide-zinc-100 text-sm dark:divide-zinc-800"
+              data-testid="suggestions"
+            >
+              {suggestions.data.map((suggestion) => (
+                <li key={suggestion.index} className="flex flex-wrap items-start gap-3 px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <p>
+                      <span className="font-mono text-xs text-zinc-500">{suggestion.stepId}</span>{" "}
+                      <code className="break-all rounded bg-zinc-100 px-1 py-0.5 text-xs dark:bg-zinc-800">
+                        {describeLocator(suggestion.locator)}
+                      </code>
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      Instead of {suggestion.failed.map(describeLocator).join(", ")}
+                    </p>
+                    {suggestion.reason && (
+                      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                        {suggestion.reason}
+                      </p>
+                    )}
+                  </div>
+                  {suggestion.state === "open" ? (
+                    <Button
+                      disabled={accept.isPending}
+                      onClick={() => accept.mutate(suggestion.index)}
+                    >
+                      Accept
+                    </Button>
+                  ) : suggestion.state === "applied" ? (
+                    <Badge tone="green">In the recording</Badge>
+                  ) : (
+                    <Badge>Step changed since</Badge>
+                  )}
+                </li>
+              ))}
+            </ul>
           </Card>
         )}
 

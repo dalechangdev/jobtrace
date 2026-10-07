@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { aiHealing } from "@jobtrace/ai-fallback";
 import {
+  type Healing,
   isApiSource,
   isJobTraceError,
   JobTraceError,
@@ -44,6 +46,11 @@ export function parseParams(pairs: readonly string[]): Record<string, string> {
   return params;
 }
 
+function withResolver(healing: Healing | undefined) {
+  const locatorResolver = healing?.createResolver();
+  return locatorResolver ? { locatorResolver } : {};
+}
+
 /**
  * `jobtrace run <recording>`. A stored recording (id, id prefix or name) is
  * replayed and tracked in the database: jobs are flagged new or changed against
@@ -66,6 +73,8 @@ export async function runCommand(
     ...(options.headed ? { headed: true } : {}),
     ...(options.trace ? { trace: true } : {}),
   };
+  // Off unless AI_FALLBACK_ENABLED and ANTHROPIC_API_KEY are both set.
+  const healing = aiHealing(ctx.config, ctx.io.ai);
   const print = (value: unknown) => ctx.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
   const file = resolve(ctx.cwd, ref);
 
@@ -85,6 +94,7 @@ export async function runCommand(
         ? fetchSource(definition, { signal, onEvent, robots: ctx.politeness.robots })
         : runRecording(definition, {
             ...shared,
+            ...withResolver(healing),
             signal,
             robots: ctx.politeness.robots,
             artifactsDir: options.artifacts ?? join(ctx.config.dataDir, "artifacts", newId("run")),
@@ -132,6 +142,7 @@ export async function runCommand(
       artifactRetentionRuns: ctx.config.artifactRetentionRuns,
       politeness: ctx.politeness,
       run: { ...shared, signal },
+      ...(healing ? { healing } : {}),
       onEvent: (event) => ctx.logger.event(event),
     }),
   );

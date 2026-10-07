@@ -13,6 +13,9 @@ export function Settings() {
     if (settings.data && !draft) {
       const {
         aiFallbackKeyConfigured: _key,
+        aiFallbackModel: _model,
+        aiFallbackMaxCalls: _calls,
+        aiFallbackAutoApply: _auto,
         dataDir: _dir,
         local: _local,
         ...editable
@@ -92,14 +95,24 @@ export function Settings() {
                   setDraft({ ...draft, aiFallbackEnabled: event.target.checked });
                 }}
               />
-              Allow asking an AI model to find an element when every recorded locator fails
+              Ask Claude to find an element when every recorded locator fails
             </label>
             <p className="text-xs text-zinc-500">
-              Not available yet in this version. When it is, it sends a trimmed copy of the page (no
-              form values, no cookies) to the Claude API. The API key is read from the server's
-              environment and is{" "}
-              {settings.data.aiFallbackKeyConfigured ? "configured" : "not configured"}.
+              Off by default. When a site was redesigned and a step can no longer find its element,
+              a trimmed copy of that part of the page is sent to the Claude API (
+              {settings.data.aiFallbackModel}) — never what was typed into forms, cookies or saved
+              logins — at most {settings.data.aiFallbackMaxCalls} times per run. What it finds is
+              checked against the page and{" "}
+              {settings.data.aiFallbackAutoApply
+                ? "saved into the recording once the run succeeded (AI_FALLBACK_AUTO_APPLY is on)."
+                : "shown on the run's page as a suggestion for you to accept."}
             </p>
+            {!settings.data.aiFallbackKeyConfigured && (
+              <Note>
+                No API key is configured, so this switch has no effect yet. Set ANTHROPIC_API_KEY in
+                the server's environment and restart it.
+              </Note>
+            )}
           </div>
         </Card>
         <p className="text-xs text-zinc-500">Data is stored in {settings.data.dataDir}.</p>

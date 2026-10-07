@@ -49,6 +49,8 @@ export interface ResolveOptions {
   timeoutMs?: number;
   /** Return null instead of throwing when nothing matches. */
   optional?: boolean;
+  /** Never ask the LocatorResolver about this target. */
+  noHeal?: boolean;
 }
 
 interface Attempt {
@@ -75,6 +77,13 @@ export async function resolveTarget(
   const root = rootFor(scope, target, stepId);
   const candidates = target.locators.map((spec) => buildLocator(root, spec));
   const remembered = state.locatorMemo.get(target);
+  // A target healed earlier in this run is not waited for (or paid for) again.
+  const healedBefore = state.healed.get(target);
+  if (healedBefore) {
+    const candidate = buildLocator(root, healedBefore);
+    const matches = await candidate.count().catch(() => 0);
+    if (list ? matches >= 1 : matches === 1) return candidate;
+  }
   const start = Date.now();
   let attempts: Attempt[] = [];
 
@@ -124,7 +133,11 @@ export async function resolveTarget(
     await sleep(state, Math.min(state.tuning.pollIntervalMs, timeoutMs - elapsed));
   }
 
-  const healed = optional ? null : await heal(state, scope, target, root, { stepId, list });
+  // An optional element may simply not be there, which is not worth asking about
+  // for every item: such a target gets one attempt per run.
+  const mayHeal = !options.noHeal && !(optional && state.healTried.has(target));
+  state.healTried.add(target);
+  const healed = mayHeal ? await heal(state, scope, target, root, { stepId, list }) : null;
   if (healed) return healed;
   if (optional) return null;
   throw new JobTraceError(
@@ -138,18 +151,63 @@ export async function resolveTarget(
 
 const SNAPSHOT_LIMIT = 60_000;
 
-/** A size-capped page snapshot with scripts, styles and form values removed. */
-async function trimmedSnapshot(page: Page): Promise<string> {
-  const html = await page.evaluate(() => {
-    const clone = document.documentElement.cloneNode(true) as HTMLElement;
-    for (const node of clone.querySelectorAll("script, style, noscript, svg, link, meta")) {
-      node.remove();
+/**
+ * A size-capped snapshot of the area a target is looked up in, with scripts,
+ * styles and everything typed into forms removed.
+ */
+async function trimmedSnapshot(root: Root): Promise<string> {
+  const element = "count" in root ? root.first() : root.locator(":root");
+  const html = await element.evaluate((node) => {
+    const clone = node.cloneNode(true) as HTMLElement;
+    for (const junk of clone.querySelectorAll(
+      "script, style, noscript, svg, link, meta, template",
+    )) {
+      junk.remove();
     }
-    for (const input of clone.querySelectorAll("input, textarea")) input.removeAttribute("value");
+    for (const input of clone.querySelectorAll("input, textarea, select, option")) {
+      input.removeAttribute("value");
+      input.removeAttribute("selected");
+      input.removeAttribute("checked");
+    }
     for (const area of clone.querySelectorAll("textarea")) area.textContent = "";
+    for (const editable of clone.querySelectorAll("[contenteditable]")) editable.textContent = "";
     return clone.outerHTML;
   });
   return html.length > SNAPSHOT_LIMIT ? html.slice(0, SNAPSHOT_LIMIT) : html;
+}
+
+const words = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+
+/** Share of words two texts have in common (Dice coefficient), 0 to 1. */
+export function textSimilarity(a: string, b: string): number {
+  const left = new Set(words(a));
+  const right = new Set(words(b));
+  if (left.size === 0 || right.size === 0) return 0;
+  let shared = 0;
+  for (const word of left) if (right.has(word)) shared += 1;
+  return (2 * shared) / (left.size + right.size);
+}
+
+const MIN_TEXT_SIMILARITY = 0.6;
+
+/**
+ * Whether the element a suggestion points at could be the recorded one: it is
+ * the same kind of element, or it says nearly the same thing. Text alone
+ * cannot be required, because an extracted field reads differently on every job.
+ */
+async function resemblesFingerprint(
+  candidate: Locator,
+  target: Target,
+): Promise<{ ok: boolean; tag: string; similarity: number }> {
+  const actual = await candidate.first().evaluate((node) => ({
+    tag: node.tagName.toLowerCase(),
+    text: (node.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 500),
+  }));
+  const fingerprint = target.fingerprint;
+  if (!fingerprint) return { ok: true, tag: actual.tag, similarity: 0 };
+  const similarity = fingerprint.text ? textSimilarity(fingerprint.text, actual.text) : 0;
+  const ok = fingerprint.tag.toLowerCase() === actual.tag || similarity >= MIN_TEXT_SIMILARITY;
+  return { ok, tag: actual.tag, similarity: Math.round(similarity * 100) / 100 };
 }
 
 async function heal(
@@ -163,36 +221,48 @@ async function heal(
   if (!resolver) return null;
   try {
     const suggestion = await resolver.resolve(target, {
-      pageSnapshot: await trimmedSnapshot(scope.page),
+      pageSnapshot: await trimmedSnapshot(root),
+      scope: target.relativeTo === "item" ? "item" : target.frame.length > 0 ? "frame" : "page",
       url: scope.page.url(),
       stepId,
       list,
+      signal: state.options.signal
+        ? AbortSignal.any([state.options.signal, state.timeoutSignal])
+        : state.timeoutSignal,
     });
     if (!suggestion) return null;
+    const described = {
+      locator: suggestion.locator,
+      source: suggestion.source,
+      ...(suggestion.reason ? { reason: suggestion.reason } : {}),
+    };
+    const reject = (message: string, data: Record<string, unknown>) => {
+      emit(state, "warn", "locator_suggestion_rejected", message, {
+        stepId,
+        data: { ...described, ...data },
+      });
+      return null;
+    };
     const candidate = buildLocator(root, suggestion.locator);
     const matches = await candidate.count();
     if (list ? matches < 1 : matches !== 1) {
-      emit(
-        state,
-        "warn",
-        "locator_suggestion_rejected",
-        `Suggested locator matched ${matches} element(s)`,
-        {
-          stepId,
-          data: { locator: suggestion.locator, source: suggestion.source, matches },
-        },
-      );
-      return null;
+      return reject(`Suggested locator matched ${matches} element(s)`, { matches });
     }
+    const likeness = await resemblesFingerprint(candidate, target);
+    if (!likeness.ok) {
+      return reject(
+        `Suggested locator points at a <${likeness.tag}> that does not resemble the recorded <${target.fingerprint?.tag}>`,
+        { matches, tag: likeness.tag, similarity: likeness.similarity },
+      );
+    }
+    state.healed.set(target, suggestion.locator);
     emit(
       state,
       "warn",
       "locator_suggestion",
-      `Healed with a ${suggestion.source} locator suggestion`,
-      {
-        stepId,
-        data: { locator: suggestion.locator, source: suggestion.source },
-      },
+      `Healed with a ${suggestion.source} locator suggestion (${suggestion.locator.kind})`,
+      // `failed` identifies the target when the suggestion is accepted later.
+      { stepId, data: { ...described, failed: target.locators, similarity: likeness.similarity } },
     );
     return candidate;
   } catch (error) {
